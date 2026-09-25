@@ -1,0 +1,7 @@
+{
+  "mimic_iv": "SET_YOUR_MIMIC_IV_PATH",
+  "mimic_cxr": "SET_YOUR_MIMIC_CXR_PATH",
+  "mimic_note": "SET_YOUR_MIMIC_NOTE_PATH",
+  "processed": "data/processed",
+  "outputs": "outputs"
+}

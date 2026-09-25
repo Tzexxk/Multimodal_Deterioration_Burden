@@ -1,0 +1,14 @@
+{
+  "raw_audit": {
+    "record_list": "cxr-record-list.csv",
+    "study_list": "cxr-study-list.csv",
+    "dicom_directory": "dataset",
+    "dicom_path_layout": "auto",
+    "dicom_suffixes": [".dcm"],
+    "decode_pixels": true,
+    "dicom_workers": 8,
+    "dicom_batch_size": 128,
+    "frontal_views": ["AP", "PA"],
+    "time_priority": ["AcquisitionDateTime", "StudyDate+StudyTime"]
+  }
+}

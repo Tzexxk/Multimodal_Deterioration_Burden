@@ -1,0 +1,36 @@
+{
+  "raw_audit": {
+    "lab_sample_rows": 10000,
+    "lab_time_fields": ["charttime", "storetime"],
+    "required_tables": {
+      "patients": {
+        "path": "hosp/patients.csv",
+        "columns": ["subject_id", "anchor_age", "anchor_year"]
+      },
+      "admissions": {
+        "path": "hosp/admissions.csv",
+        "columns": ["subject_id", "hadm_id", "admittime", "dischtime", "deathtime"]
+      },
+      "transfers": {
+        "path": "hosp/transfers.csv",
+        "columns": ["subject_id", "hadm_id", "careunit", "intime", "outtime"]
+      },
+      "icustays": {
+        "path": "icu/icustays.csv",
+        "columns": ["subject_id", "hadm_id", "stay_id", "intime", "outtime"]
+      },
+      "labevents": {
+        "path": "hosp/labevents.csv",
+        "columns": ["subject_id", "hadm_id", "itemid", "charttime", "storetime", "valuenum", "valueuom", "specimen_id"]
+      },
+      "d_labitems": {
+        "path": "hosp/d_labitems.csv",
+        "columns": ["itemid", "label", "fluid", "category"]
+      },
+      "services": {
+        "path": "hosp/services.csv",
+        "columns": ["subject_id", "hadm_id", "transfertime", "prev_service", "curr_service"]
+      }
+    }
+  }
+}
