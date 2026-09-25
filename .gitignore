@@ -1,0 +1,74 @@
+# Local paths and secrets
+/configs/*.local.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Raw/protected data and patient-level derivatives
+/data/raw/*
+!/data/raw/README.md
+/data/external/
+/data/processed/
+/data/cache/
+/MIMIC-IV/
+/MIMIC-CXR/
+/MIMIC-IV-NOTE/
+/dataset_directory_structure.txt
+
+# Generated experiments, including checkpoints, predictions and logs
+/outputs/
+
+# Data and model files accidentally placed outside the directories above
+*.parquet
+*.arrow
+*.feather
+*.dcm
+*.dicom
+*.csv.gz
+*.tsv.gz
+*.npy
+*.npz
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.h5
+*.hdf5
+*.joblib
+*.pkl
+*.pickle
+
+# Python environments, build products and tool caches
+/.venv/
+/venv/
+/env/
+/.conda/
+__pycache__/
+*.py[cod]
+*.egg-info/
+/build/
+/dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Local logs, temporary files and operating-system files
+/docs/*
+*.log
+*.tmp
+*.temp
+~$*
+.DS_Store
+Thumbs.db
+Desktop.ini

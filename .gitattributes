@@ -1,0 +1,19 @@
+* text=auto
+
+# Source code and project configuration
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.toml text eol=lf
+*.ipynb text eol=lf
+
+# Documents
+*.docx binary
+*.pdf binary
+
+# Images that may be intentionally committed
+*.png binary
+*.jpg binary
+*.jpeg binary
