@@ -1,4 +1,4 @@
-"""Build the 48-hour candidate cohort audit without freezing model inputs."""
+"""Build a window-specific candidate audit without freezing model inputs."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ AUDIT_SCHEMA = pa.schema(
         pa.field("label", pa.int8()),
         pa.field("label_status", pa.string(), nullable=False),
         pa.field("prediction_window", pa.string(), nullable=False),
-        pa.field("prediction_max_hours", pa.int16(), nullable=False),
+        pa.field("prediction_max_hours", pa.int64(), nullable=False),
         pa.field("eligible_age", pa.bool_(), nullable=False),
         pa.field("eligible_admission_match", pa.bool_(), nullable=False),
         pa.field("eligible_frontal", pa.bool_(), nullable=False),
@@ -384,7 +384,9 @@ def _assess_study(
     }
 
 
-def _validate_and_count(rows: list[dict[str, Any]], n_matched: int) -> dict[str, Any]:
+def _validate_and_count(
+    rows: list[dict[str, Any]], n_matched: int, min_hours: int, max_hours: int
+) -> dict[str, Any]:
     if len({(row["subject_id"], row["study_id"]) for row in rows}) != len(rows):
         raise ValueError("Duplicate study in candidate cohort audit")
     if sum(row["eligible_admission_match"] for row in rows) != n_matched:
@@ -403,11 +405,11 @@ def _validate_and_count(rows: list[dict[str, Any]], n_matched: int) -> dict[str,
             raise ValueError("Eligible study has no sample key or binary label")
         if not row["final_eligible"] and row["label"] is not None:
             raise ValueError("Excluded study has a training label")
-        if row["label"] == 1 and not 6 < row["hours_to_icu"] <= 48:
-            raise ValueError("Positive study is outside the 6-48 hour window")
+        if row["label"] == 1 and not min_hours < row["hours_to_icu"] <= max_hours:
+            raise ValueError("Positive study is outside the configured window")
         if row["label"] == 0 and row["hours_to_icu"] is not None:
-            if row["hours_to_icu"] <= 48:
-                raise ValueError("Negative study entered ICU within 48 hours")
+            if row["hours_to_icu"] <= max_hours:
+                raise ValueError("Negative study entered ICU within the configured window")
     if len({row["sample_id"] for row in eligible}) != len(eligible):
         raise ValueError("Duplicate eligible sample_id")
     exclusion_counts = Counter(
@@ -474,17 +476,32 @@ def _validate_and_count(rows: list[dict[str, Any]], n_matched: int) -> dict[str,
     }
 
 
-def build_candidate_cohort(root: Path, paths_file: Path, cohort_file: Path) -> int:
-    """Write the preliminary 48-hour audit; never write a formal cohort."""
+def build_candidate_cohort(
+    root: Path, paths_file: Path, cohort_file: Path, requested_max_hours: int
+) -> int:
+    """Write a window-specific candidate audit; never freeze a cohort."""
     started = datetime.now(timezone.utc)
     paths = _json_file(paths_file)
     config = _json_file(cohort_file)
     prediction = config["prediction"]
-    if config["sample_unit"] != "study" or prediction != {
-        "min_hours": 6,
-        "max_hours": 48,
-    }:
-        raise ValueError("05a requires study-level sampling and a 6-48h window")
+    if config["sample_unit"] != "study":
+        raise ValueError("Candidate audit requires study-level sampling")
+    if not isinstance(prediction, dict):
+        raise ValueError("cohort.prediction must be a JSON object")
+    min_hours = prediction.get("min_hours")
+    max_hours = prediction.get("max_hours")
+    if (
+        type(min_hours) is not int
+        or min_hours != 6
+        or type(max_hours) is not int
+        or max_hours <= min_hours
+    ):
+        raise ValueError("Candidate audit requires an integer max_hours greater than 6")
+    if type(requested_max_hours) is not int or requested_max_hours != max_hours:
+        raise ValueError(
+            "--max-hours must equal cohort.json prediction.max_hours; "
+            "update the JSON configuration before running another window"
+        )
     if config["positive_count_unit"] != "unique_subject_id":
         raise ValueError("positive_count_unit must be unique_subject_id")
     configured_units = config["icu_careunits"]
@@ -633,13 +650,13 @@ def build_candidate_cohort(root: Path, paths_file: Path, cohort_file: Path) -> i
                     transfers.get(hadm_id, []),
                     stays.get(hadm_id, []),
                     ICU_CAREUNITS,
-                    6,
-                    48,
+                    min_hours,
+                    max_hours,
                 )
             )
             progress.update(1)
-    counts = _validate_and_count(audit_rows, len(matched_rows))
-    audit_dir = outputs / "audit" / "window_48h"
+    counts = _validate_and_count(audit_rows, len(matched_rows), min_hours, max_hours)
+    audit_dir = outputs / "audit" / f"window_{max_hours}h"
     audit_dir.mkdir(parents=True, exist_ok=True)
     audit_path = audit_dir / "cohort_audit.parquet"
     counts_path = audit_dir / "positive_case_counts.json"
@@ -654,7 +671,7 @@ def build_candidate_cohort(root: Path, paths_file: Path, cohort_file: Path) -> i
         if pq.ParquetFile(temp_audit).metadata.num_rows != len(audit_rows):
             raise ValueError("Written candidate audit row count is incorrect")
         summary = {
-            "mode": "candidate_48h",
+            "mode": f"candidate_{max_hours}h",
             "started_utc": started.isoformat(),
             "finished_utc": datetime.now(timezone.utc).isoformat(),
             "git_commit": _git_commit(root),
@@ -663,7 +680,7 @@ def build_candidate_cohort(root: Path, paths_file: Path, cohort_file: Path) -> i
                 name: _file_hash(path) for name, path in input_paths.items()
             },
             "audit_output_sha256": _file_hash(temp_audit),
-            "prediction_window": "6-48h",
+            "prediction_window": f"{min_hours}-{max_hours}h",
             "positive_count_unit": "unique_subject_id",
             **counts,
             "meets_80_positive_subject_threshold": counts["positive_subjects"] >= 80,
@@ -678,7 +695,7 @@ def build_candidate_cohort(root: Path, paths_file: Path, cohort_file: Path) -> i
         temp_audit.unlink(missing_ok=True)
         temp_counts.unlink(missing_ok=True)
     print(
-        f"Candidate 6-48h audit: {counts['audited_studies']} studies, "
+        f"Candidate {min_hours}-{max_hours}h audit: {counts['audited_studies']} studies, "
         f"{counts['eligible_studies']} eligible, "
         f"{counts['positive_subjects']} unique positive subjects"
     )

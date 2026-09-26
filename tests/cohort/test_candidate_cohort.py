@@ -1,4 +1,4 @@
-"""Synthetic checks for the study-level 48-hour candidate audit."""
+"""Synthetic checks for configurable study-level candidate audits."""
 
 from __future__ import annotations
 
@@ -85,6 +85,20 @@ class LabelTests(TestCase):
                 72,
             ).label,
             1,
+        )
+        for hours, expected in [(72, 1), (73, 0)]:
+            self.assertEqual(
+                evaluate_label(
+                    BASE, BASE + timedelta(hours=100),
+                    BASE + timedelta(hours=hours), None, 0, 6, 72,
+                ).label,
+                expected,
+            )
+        self.assertTrue(
+            evaluate_label(
+                BASE, BASE + timedelta(hours=100), None,
+                BASE + timedelta(hours=60), 1, 6, 72,
+            ).death_within_H_without_icu
         )
 
     def test_cross_audit_excludes_only_changed_decision(self) -> None:
@@ -403,18 +417,20 @@ class CandidateIntegrationTests(TestCase):
                 ],
                 [
                     {
-                        "subject_id": 1,
-                        "hadm_id": 100,
-                        "stay_id": 10001,
+                        "subject_id": subject,
+                        "hadm_id": hadm,
+                        "stay_id": stay_id,
                         "first_careunit": unit,
                         "last_careunit": unit,
-                        "intime": at(7),
-                        "outtime": at(17),
+                        "intime": at(hour),
+                        "outtime": at(hour + 10),
                     }
+                    for subject, hadm, stay_id, hour in
+                    [(1, 100, 10001, 7), (6, 104, 10003, 70)]
                 ],
             )
 
-            self.assertEqual(build_candidate_cohort(root, paths_file, cohort_file), 0)
+            self.assertEqual(build_candidate_cohort(root, paths_file, cohort_file, 48), 0)
             audit_path = root / "outputs/audit/window_48h/cohort_audit.parquet"
             summary_path = root / "outputs/audit/window_48h/positive_case_counts.json"
             rows = {
@@ -433,7 +449,7 @@ class CandidateIntegrationTests(TestCase):
             self.assertEqual(rows[1005]["exclusion_reason"], "admission_match_failed")
             self.assertEqual(rows[1006]["exclusion_reason"], "icu_source_conflict")
             self.assertEqual(rows[1007]["label"], 0)
-            self.assertTrue(rows[1007]["icu_source_disagreement"])
+            self.assertFalse(rows[1007]["icu_source_disagreement"])
             self.assertEqual(rows[1008]["exclusion_reason"], "underage_or_unknown_age")
             self.assertEqual(rows[1011]["exclusion_reason"], "invalid_icu_timeline")
             self.assertEqual(rows[1011]["icu_timeline_issue"], "missing_transfer_rows")
@@ -444,6 +460,43 @@ class CandidateIntegrationTests(TestCase):
             self.assertEqual(summary["stage_counts"]["final_eligible"]["studies"], 3)
             self.assertFalse((root / "processed/cohort/cohort.parquet").exists())
             first_hash = summary["audit_output_sha256"]
-            self.assertEqual(build_candidate_cohort(root, paths_file, cohort_file), 0)
+            self.assertEqual(build_candidate_cohort(root, paths_file, cohort_file, 48), 0)
             rerun = json.loads(summary_path.read_text(encoding="utf-8"))
             self.assertEqual(rerun["audit_output_sha256"], first_hash)
+
+            cohort = json.loads(cohort_file.read_text(encoding="utf-8"))
+            cohort["prediction"]["max_hours"] = 60
+            cohort_file.write_text(json.dumps(cohort), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "--max-hours must equal"):
+                build_candidate_cohort(root, paths_file, cohort_file, 72)
+            self.assertEqual(build_candidate_cohort(root, paths_file, cohort_file, 60), 0)
+            audit_60 = root / "outputs/audit/window_60h/cohort_audit.parquet"
+            self.assertTrue(audit_60.is_file())
+            self.assertEqual(
+                next(
+                    row["label"] for row in pq.read_table(audit_60).to_pylist()
+                    if row["study_id"] == 1007
+                ),
+                0,
+            )
+
+            cohort["prediction"]["max_hours"] = 72
+            cohort_file.write_text(json.dumps(cohort), encoding="utf-8")
+            self.assertEqual(build_candidate_cohort(root, paths_file, cohort_file, 72), 0)
+            audit_72 = root / "outputs/audit/window_72h/cohort_audit.parquet"
+            summary_72 = json.loads(
+                (root / "outputs/audit/window_72h/positive_case_counts.json")
+                .read_text(encoding="utf-8")
+            )
+            rows_72 = {
+                row["study_id"]: row for row in pq.read_table(audit_72).to_pylist()
+            }
+            self.assertEqual(rows_72[1007]["label"], 1)
+            self.assertEqual(rows_72[1007]["prediction_window"], "6-72h")
+            self.assertEqual(summary_72["mode"], "candidate_72h")
+            self.assertEqual(summary_72["positive_studies"], 2)
+            self.assertEqual(summary_72["positive_subjects"], 2)
+            self.assertEqual(
+                json.loads(summary_path.read_text(encoding="utf-8"))["audit_output_sha256"],
+                first_hash,
+            )

@@ -4,7 +4,7 @@
   "positive_count_unit": "unique_subject_id",
   "prediction": {
     "min_hours": 6,
-    "max_hours": 48
+    "max_hours": 72
   },
   "icu_careunits": [
     "Surgical Intensive Care Unit (SICU)",
