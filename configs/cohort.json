@@ -1,6 +1,26 @@
 {
   "sample_unit": "study",
+  "ehr_history_hours": 24,
+  "positive_count_unit": "unique_subject_id",
+  "prediction": {
+    "min_hours": 6,
+    "max_hours": 48
+  },
+  "icu_careunits": [
+    "Surgical Intensive Care Unit (SICU)",
+    "Medical Intensive Care Unit (MICU)",
+    "Cardiac Vascular Intensive Care Unit (CVICU)",
+    "Medical/Surgical Intensive Care Unit (MICU/SICU)",
+    "Coronary Care Unit (CCU)",
+    "Trauma SICU (TSICU)",
+    "Neuro Surgical Intensive Care Unit (Neuro SICU)"
+  ],
   "admission_matching": {
     "admissions_path": "hosp/admissions.csv"
+  },
+  "cohort_sources": {
+    "patients_path": "hosp/patients.csv",
+    "transfers_path": "hosp/transfers.csv",
+    "icustays_path": "icu/icustays.csv"
   }
 }
