@@ -1,0 +1,6 @@
+{
+  "sample_unit": "study",
+  "admission_matching": {
+    "admissions_path": "hosp/admissions.csv"
+  }
+}
