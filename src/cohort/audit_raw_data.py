@@ -131,8 +131,10 @@ def _indexed_dicom_path(
     index_row: dict[str, str],
     layout: str,
     local_files: set[Path],
+    *,
+    probe_root: bool = True,
 ) -> tuple[Path, str, bool]:
-    """Resolve an index path using a validated, explicitly selected layout."""
+    """Resolve a validated index path; skip root probes after a full root scan."""
     value = index_row.get("path", "")
     parts = value.replace("\\", "/").split("/")
     if (
@@ -173,7 +175,7 @@ def _indexed_dicom_path(
 
     for candidate, strategy in candidates:
         if candidate in local_files or (
-            strategy == "standard_root" and candidate.is_file()
+            probe_root and strategy == "standard_root" and candidate.is_file()
         ):
             if not candidate.resolve().is_relative_to(cxr_root):
                 raise ValueError("unsafe_index_path")
