@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import re
-import sys
-import tempfile
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -16,20 +13,23 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pydicom
-from tqdm import tqdm
 
-from src.cohort.audit_raw_data import (
+from src.cohort.common import (
     _acquisition_time,
     _config_hash,
     _file_hash,
     _file_version,
     _git_commit,
+    _imaging_settings,
     _indexed_dicom_path,
     _json_file,
+    _OutputRun,
+    _progress,
+    _protect_outputs,
     _resolve_config_path,
     _scan_physical_dicom,
     _under_root,
+    _verify_run,
 )
 
 INDEX_SCHEMA = pa.schema(
@@ -63,7 +63,9 @@ def _checked_csv(path: Path, required: set[str]) -> tuple[Any, csv.DictReader]:
         reader = csv.DictReader(stream, strict=True)
         missing = required - set(reader.fieldnames or [])
         if missing:
-            raise ValueError(f"{path.name} is missing columns: {', '.join(sorted(missing))}")
+            raise ValueError(
+                f"{path.name} is missing columns: {', '.join(sorted(missing))}"
+            )
         return stream, reader
     except Exception:
         stream.close()
@@ -117,6 +119,8 @@ def _read_local_dicom(
         "index_path": index_row["path"],
         "path_resolution": strategy,
     }
+    import pydicom
+
     try:
         dataset = pydicom.dcmread(str(path), force=False)
     except Exception as error:  # Malformed DICOMs can raise several exception types.
@@ -179,28 +183,12 @@ def _prior_audit_count(report_path: Path) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _temporary_path(directory: Path, suffix: str) -> Path:
-    descriptor, value = tempfile.mkstemp(prefix=".cxr_index_", suffix=suffix, dir=directory)
-    os.close(descriptor)
-    return Path(value)
-
-
 def build_cxr_index(root: Path, paths_file: Path, imaging_file: Path) -> int:
     """Build the image index and aggregate summary; return zero on success."""
     started = datetime.now(timezone.utc)
     paths = _json_file(paths_file)
     imaging = _json_file(imaging_file)["raw_audit"]
-    workers = imaging["dicom_workers"]
-    batch_size = imaging["dicom_batch_size"]
-    layout = imaging["dicom_path_layout"]
-    if type(workers) is not int or not 1 <= workers <= 32:
-        raise ValueError("dicom_workers must be an integer from 1 to 32")
-    if type(batch_size) is not int or not workers <= batch_size <= 4096:
-        raise ValueError("dicom_batch_size must be between workers and 4096")
-    if layout not in {"auto", "standard", "flattened"}:
-        raise ValueError("Unsupported dicom_path_layout")
-    if imaging["time_priority"] != ["AcquisitionDateTime", "StudyDate+StudyTime"]:
-        raise ValueError("Unsupported time_priority")
+    workers, batch_size, layout = _imaging_settings(imaging)
     if set(imaging["frontal_views"]) != {"AP", "PA"}:
         raise ValueError("frontal_views must contain AP and PA")
     if not imaging["decode_pixels"]:
@@ -211,95 +199,90 @@ def build_cxr_index(root: Path, paths_file: Path, imaging_file: Path) -> int:
     outputs = _resolve_config_path(paths["outputs"], root, raw=False)
     if not cxr_root.is_dir():
         raise FileNotFoundError(f"Missing MIMIC-CXR root: {cxr_root}")
-    for destination in (processed, outputs):
-        if destination == cxr_root or destination.is_relative_to(cxr_root):
-            raise ValueError("Generated output must be outside the raw CXR root")
-    dicom_dir = _under_root(cxr_root, imaging["dicom_directory"])
-    record_path = _under_root(cxr_root, imaging["record_list"])
-    study_path = _under_root(cxr_root, imaging["study_list"])
-    if not dicom_dir.is_dir():
-        raise FileNotFoundError(f"Missing DICOM directory: {dicom_dir}")
+    _protect_outputs(paths, root, processed, outputs)
+    with _OutputRun(outputs, 2, processed) as run:
+        prior_report = outputs / "audit" / "audit_report.md"
+        if (
+            prior_report.exists()
+            or (outputs / "audit" / ".step_01_pending.json").exists()
+        ):
+            _verify_run(outputs, 1, prior_report)
+        dicom_dir = _under_root(cxr_root, imaging["dicom_directory"])
+        record_path = _under_root(cxr_root, imaging["record_list"])
+        study_path = _under_root(cxr_root, imaging["study_list"])
+        if not dicom_dir.is_dir():
+            raise FileNotFoundError(f"Missing DICOM directory: {dicom_dir}")
 
-    studies = _study_keys(study_path)
-    scanned, walk_errors = _scan_physical_dicom(
-        cxr_root, {suffix.lower() for suffix in imaging["dicom_suffixes"]}
-    )
-    if walk_errors:
-        raise OSError("DICOM directory scan failed: " + "; ".join(walk_errors))
-    root_files = cxr_root / "files"
-    local_files = {
-        path for path in scanned
-        if path.is_relative_to(dicom_dir) or path.is_relative_to(root_files)
-    }
-    if not local_files:
-        raise ValueError("No local DICOM files found in the configured CXR layouts")
+        studies = _study_keys(study_path)
+        scanned, walk_errors = _scan_physical_dicom(
+            cxr_root, {suffix.lower() for suffix in imaging["dicom_suffixes"]}
+        )
+        if walk_errors:
+            raise OSError("DICOM directory scan failed: " + "; ".join(walk_errors))
+        root_files = cxr_root / "files"
+        local_files = {
+            path
+            for path in scanned
+            if path.is_relative_to(dicom_dir) or path.is_relative_to(root_files)
+        }
+        if not local_files:
+            raise ValueError("No local DICOM files found in the configured CXR layouts")
 
-    index_dir = processed / "index"
-    audit_dir = outputs / "audit"
-    index_dir.mkdir(parents=True, exist_ok=True)
-    audit_dir.mkdir(parents=True, exist_ok=True)
-    index_path = index_dir / "cxr_index.parquet"
-    summary_path = audit_dir / "cxr_index_summary.json"
-    temp_index = _temporary_path(index_dir, ".parquet")
-    temp_summary: Path | None = None
-    counts: Counter[str] = Counter()
-    time_sources: Counter[str] = Counter()
-    time_failures: Counter[str] = Counter()
-    decode_errors: Counter[str] = Counter()
-    resolutions: Counter[str] = Counter()
-    keys: set[tuple[int, int, str]] = set()
-    matched_files: set[Path] = set()
-    pending: list[tuple[dict[str, str], Path, str]] = []
-    output_rows: list[dict[str, Any]] = []
+        index_dir = processed / "index"
+        audit_dir = outputs / "audit"
+        index_path = index_dir / "cxr_index.parquet"
+        summary_path = audit_dir / "cxr_index_summary.json"
+        temp_index = run.path(index_path)
+        counts: Counter[str] = Counter()
+        time_sources: Counter[str] = Counter()
+        time_failures: Counter[str] = Counter()
+        decode_errors: Counter[str] = Counter()
+        resolutions: Counter[str] = Counter()
+        keys: set[tuple[int, int, str]] = set()
+        matched_files: set[Path] = set()
+        pending: list[tuple[dict[str, str], Path, str]] = []
+        output_rows: list[dict[str, Any]] = []
 
-    def write_rows(writer: pq.ParquetWriter) -> None:
-        if output_rows:
-            writer.write_table(pa.Table.from_pylist(output_rows, schema=INDEX_SCHEMA))
-            output_rows.clear()
+        def write_rows(writer: pq.ParquetWriter) -> None:
+            if output_rows:
+                writer.write_table(
+                    pa.Table.from_pylist(output_rows, schema=INDEX_SCHEMA)
+                )
+                output_rows.clear()
 
-    def process_batch(pool: ThreadPoolExecutor, writer: pq.ParquetWriter) -> None:
-        if not pending:
-            return
-        for row in pool.map(lambda item: _read_local_dicom(item, cxr_root), pending):
-            _validate_image(row)
-            output_rows.append(row)
-            counts["output_rows"] += 1
-            counts["readable_images"] += int(row["is_readable"])
-            counts["frontal_images"] += int(row["is_frontal"])
-            counts["images_with_acquisition_time"] += int(
-                row["acquisition_datetime"] is not None
-            )
-            time_sources[row["acquisition_time_source"]] += 1
-            if row["time_failure_reason"]:
-                time_failures[row["time_failure_reason"]] += 1
-            if row["decode_error"]:
-                decode_errors[row["decode_error"]] += 1
-            resolutions[row["path_resolution"]] += 1
-            if len(output_rows) >= 4096:
-                write_rows(writer)
-            image_progress.update(1)
-        pending.clear()
+        def process_batch(pool: ThreadPoolExecutor, writer: pq.ParquetWriter) -> None:
+            if not pending:
+                return
+            for row in pool.map(
+                lambda item: _read_local_dicom(item, cxr_root), pending
+            ):
+                _validate_image(row)
+                output_rows.append(row)
+                counts["output_rows"] += 1
+                counts["readable_images"] += int(row["is_readable"])
+                counts["frontal_images"] += int(row["is_frontal"])
+                counts["images_with_acquisition_time"] += int(
+                    row["acquisition_datetime"] is not None
+                )
+                time_sources[row["acquisition_time_source"]] += 1
+                if row["time_failure_reason"]:
+                    time_failures[row["time_failure_reason"]] += 1
+                if row["decode_error"]:
+                    decode_errors[row["decode_error"]] += 1
+                resolutions[row["path_resolution"]] += 1
+                if len(output_rows) >= 4096:
+                    write_rows(writer)
+                image_progress.update(1)
+            pending.clear()
 
-    try:
         stream, reader = _checked_csv(record_path, RECORD_COLUMNS)
         with (
             stream,
             ThreadPoolExecutor(max_workers=workers) as pool,
             pq.ParquetWriter(temp_index, INDEX_SCHEMA, compression="zstd") as writer,
-            tqdm(
-                desc="Match CXR records",
-                unit="row",
-                unit_scale=True,
-                file=sys.stderr,
-                disable=not sys.stderr.isatty(),
-            ) as progress,
-            tqdm(
-                total=len(local_files),
-                desc="Index local DICOM",
-                unit="image",
-                unit_scale=True,
-                file=sys.stderr,
-                disable=not sys.stderr.isatty(),
+            _progress("Match CXR records") as progress,
+            _progress(
+                "Index local DICOM", unit="image", total=len(local_files)
             ) as image_progress,
         ):
             for line, row in enumerate(reader, start=2):
@@ -311,24 +294,32 @@ def build_cxr_index(root: Path, paths_file: Path, imaging_file: Path) -> int:
                     subject_id = int(row["subject_id"])
                     study_id = int(row["study_id"])
                 except ValueError as error:
-                    raise ValueError(f"Invalid record-list key at line {line}") from error
+                    raise ValueError(
+                        f"Invalid record-list key at line {line}"
+                    ) from error
                 key = (subject_id, study_id, row["dicom_id"])
                 if key in keys:
                     raise ValueError(f"Duplicate CXR record key at line {line}")
                 keys.add(key)
                 if (subject_id, study_id) not in studies:
-                    raise ValueError(f"Record-list study absent from study-list at line {line}")
+                    raise ValueError(
+                        f"Record-list study absent from study-list at line {line}"
+                    )
                 try:
                     path, strategy, exists = _indexed_dicom_path(
                         cxr_root, dicom_dir, row, layout, local_files, probe_root=False
                     )
                 except ValueError as error:
-                    raise ValueError(f"Invalid DICOM index path at line {line}: {error}") from error
+                    raise ValueError(
+                        f"Invalid DICOM index path at line {line}: {error}"
+                    ) from error
                 if not exists:
                     counts["missing_index_paths"] += 1
                     continue
                 if path in matched_files:
-                    raise ValueError(f"Local DICOM referenced more than once at line {line}")
+                    raise ValueError(
+                        f"Local DICOM referenced more than once at line {line}"
+                    )
                 if not path.is_file():
                     raise FileNotFoundError(f"Scanned DICOM disappeared: {path}")
                 matched_files.add(path)
@@ -347,7 +338,9 @@ def build_cxr_index(root: Path, paths_file: Path, imaging_file: Path) -> int:
         ):
             raise ValueError("Index coverage totals are inconsistent")
         if pq.ParquetFile(temp_index).metadata.num_rows != counts["output_rows"]:
-            raise ValueError("Written Parquet row count differs from validated index rows")
+            raise ValueError(
+                "Written Parquet row count differs from validated index rows"
+            )
 
         prior_count = _prior_audit_count(audit_dir / "audit_report.md")
         summary = {
@@ -387,18 +380,12 @@ def build_cxr_index(root: Path, paths_file: Path, imaging_file: Path) -> int:
             ),
             "parquet_sha256": _file_hash(temp_index),
         }
-        temp_summary = _temporary_path(audit_dir, ".json")
+        temp_summary = run.path(summary_path)
         temp_summary.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-        os.replace(temp_index, index_path)
-        os.replace(temp_summary, summary_path)
-        print(
-            f"Indexed {counts['output_rows']} local DICOM images; "
-            f"{counts['missing_index_paths']} index paths are absent locally."
-        )
-        print(f"Parquet: {index_path}")
-        print(f"Summary: {summary_path}")
-        return 0
-    finally:
-        temp_index.unlink(missing_ok=True)
-        if temp_summary is not None:
-            temp_summary.unlink(missing_ok=True)
+    print(
+        f"Indexed {counts['output_rows']} local DICOM images; "
+        f"{counts['missing_index_paths']} index paths are absent locally."
+    )
+    print(f"Parquet: {index_path}")
+    print(f"Summary: {summary_path}")
+    return 0

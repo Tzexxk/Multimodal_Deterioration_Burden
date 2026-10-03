@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import sys
-import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,15 +10,18 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from tqdm import tqdm
 
-from src.cohort.audit_raw_data import (
+from src.cohort.common import (
     _config_hash,
     _file_hash,
     _file_version,
     _git_commit,
     _json_file,
+    _OutputRun,
+    _progress,
+    _protect_outputs,
     _resolve_config_path,
+    _verify_run,
 )
 
 INPUT_COLUMNS = (
@@ -58,14 +58,6 @@ SELECTION_SCHEMA = pa.schema(
 )
 
 
-def _temporary_path(directory: Path, suffix: str) -> Path:
-    descriptor, value = tempfile.mkstemp(
-        prefix=".study_image_selection_", suffix=suffix, dir=directory
-    )
-    os.close(descriptor)
-    return Path(value)
-
-
 def _parse_image_time(row: dict[str, Any]) -> datetime | None:
     source = row["acquisition_time_source"]
     value = row["acquisition_datetime"]
@@ -87,12 +79,7 @@ def _parse_image_time(row: dict[str, Any]) -> datetime | None:
 
 def _pixel_area(row: dict[str, Any]) -> int:
     rows, columns = row["rows"], row["columns"]
-    if (
-        type(rows) is int
-        and type(columns) is int
-        and rows > 0
-        and columns > 0
-    ):
+    if type(rows) is int and type(columns) is int and rows > 0 and columns > 0:
         return rows * columns
     return -1
 
@@ -108,19 +95,16 @@ def _load_studies(
     study_subjects: dict[int, int] = {}
     study_dicom_ids: set[tuple[int, int, str]] = set()
     row_count = 0
-    with tqdm(
-        total=source.metadata.num_rows,
-        desc="Read CXR index",
-        unit="image",
-        unit_scale=True,
-        file=sys.stderr,
-        disable=not sys.stderr.isatty(),
+    with _progress(
+        "Read CXR index", unit="image", total=source.metadata.num_rows
     ) as progress:
         for batch in source.iter_batches(batch_size=8192, columns=list(INPUT_COLUMNS)):
             for row in batch.to_pylist():
                 row_count += 1
                 subject_id, study_id, dicom_id = (
-                    row["subject_id"], row["study_id"], row["dicom_id"]
+                    row["subject_id"],
+                    row["study_id"],
+                    row["dicom_id"],
                 )
                 if (
                     type(subject_id) is not int
@@ -216,79 +200,68 @@ def select_frontal_images(root: Path, paths_file: Path, imaging_file: Path) -> i
         raise ValueError("frontal_views must contain AP and PA")
     if imaging["time_priority"] != ["AcquisitionDateTime", "StudyDate+StudyTime"]:
         raise ValueError("Unsupported time_priority")
-    cxr_root = _resolve_config_path(paths["mimic_cxr"], root, raw=True)
     processed = _resolve_config_path(paths["processed"], root, raw=False)
     outputs = _resolve_config_path(paths["outputs"], root, raw=False)
-    raw_roots = [cxr_root]
-    for name in ("mimic_iv", "mimic_note"):
-        value = paths.get(name)
-        if isinstance(value, str) and value and not value.startswith("SET_YOUR_"):
-            raw_roots.append(_resolve_config_path(value, root, raw=True))
-    for destination in (processed, outputs):
-        if any(
-            destination == raw_root or destination.is_relative_to(raw_root)
-            for raw_root in raw_roots
+    _protect_outputs(paths, root, processed, outputs)
+    with _OutputRun(outputs, 3, processed) as run:
+        _verify_run(outputs, 2, processed / "index" / "cxr_index.parquet")
+        index_path = processed / "index" / "cxr_index.parquet"
+        if not index_path.is_file():
+            raise FileNotFoundError(f"CXR image index does not exist: {index_path}")
+        studies, image_count = _load_studies(index_path)
+        selections: list[dict[str, Any]] = []
+        selected_reasons: Counter[str] = Counter()
+        exclusions: Counter[str] = Counter()
+        with _progress(
+            "Select study images", unit="study", total=len(studies)
+        ) as progress:
+            for study_key, images in sorted(studies.items()):
+                try:
+                    selected, reason = _select_study(images)
+                except ValueError as error:
+                    raise ValueError(
+                        f"Study {study_key} could not be ranked: {error}"
+                    ) from error
+                if selected is None:
+                    exclusions[reason] += 1
+                else:
+                    if (
+                        selected["view_position"] not in FRONTAL_VIEWS
+                        or selected["acquisition_time_source"]
+                        not in RELIABLE_TIME_SOURCES
+                        or selected["n_eligible_frontal_images"] < 1
+                        or selected["n_frontal_images"]
+                        < selected["n_eligible_frontal_images"]
+                        or selected["n_images"] < selected["n_frontal_images"]
+                    ):
+                        raise ValueError(
+                            f"Invalid selected image for study {study_key}"
+                        )
+                    selections.append(selected)
+                    selected_reasons[reason] += 1
+                progress.update(1)
+
+        if len(selections) + sum(exclusions.values()) != len(studies):
+            raise ValueError("Selected and excluded study counts do not close")
+        if len({row["study_id"] for row in selections}) != len(selections):
+            raise ValueError("More than one image selected for a study")
+        selected_keys = {(row["subject_id"], row["study_id"]) for row in selections}
+        if (
+            sum(row["n_images"] for row in selections)
+            + sum(
+                len(images)
+                for key, images in studies.items()
+                if key not in selected_keys
+            )
+            != image_count
         ):
-            raise ValueError("Generated output must be outside all raw data roots")
+            raise ValueError("Image counts do not close")
 
-    index_path = processed / "index" / "cxr_index.parquet"
-    if not index_path.is_file():
-        raise FileNotFoundError(f"CXR image index does not exist: {index_path}")
-    studies, image_count = _load_studies(index_path)
-    selections: list[dict[str, Any]] = []
-    selected_reasons: Counter[str] = Counter()
-    exclusions: Counter[str] = Counter()
-    with tqdm(
-        total=len(studies),
-        desc="Select study images",
-        unit="study",
-        unit_scale=True,
-        file=sys.stderr,
-        disable=not sys.stderr.isatty(),
-    ) as progress:
-        for study_key, images in sorted(studies.items()):
-            try:
-                selected, reason = _select_study(images)
-            except ValueError as error:
-                raise ValueError(
-                    f"Study {study_key} could not be ranked: {error}"
-                ) from error
-            if selected is None:
-                exclusions[reason] += 1
-            else:
-                if (
-                    selected["view_position"] not in FRONTAL_VIEWS
-                    or selected["acquisition_time_source"] not in RELIABLE_TIME_SOURCES
-                    or selected["n_eligible_frontal_images"] < 1
-                    or selected["n_frontal_images"]
-                    < selected["n_eligible_frontal_images"]
-                    or selected["n_images"] < selected["n_frontal_images"]
-                ):
-                    raise ValueError(f"Invalid selected image for study {study_key}")
-                selections.append(selected)
-                selected_reasons[reason] += 1
-            progress.update(1)
-
-    if len(selections) + sum(exclusions.values()) != len(studies):
-        raise ValueError("Selected and excluded study counts do not close")
-    if len({row["study_id"] for row in selections}) != len(selections):
-        raise ValueError("More than one image selected for a study")
-    selected_keys = {(row["subject_id"], row["study_id"]) for row in selections}
-    if sum(row["n_images"] for row in selections) + sum(
-        len(images) for key, images in studies.items()
-        if key not in selected_keys
-    ) != image_count:
-        raise ValueError("Image counts do not close")
-
-    index_dir = processed / "index"
-    audit_dir = outputs / "audit"
-    index_dir.mkdir(parents=True, exist_ok=True)
-    audit_dir.mkdir(parents=True, exist_ok=True)
-    selection_path = index_dir / "study_image_selection.parquet"
-    summary_path = audit_dir / "study_image_selection_summary.json"
-    temp_selection = _temporary_path(index_dir, ".parquet")
-    temp_summary: Path | None = None
-    try:
+        index_dir = processed / "index"
+        audit_dir = outputs / "audit"
+        selection_path = index_dir / "study_image_selection.parquet"
+        summary_path = audit_dir / "study_image_selection_summary.json"
+        temp_selection = run.path(selection_path)
         pq.write_table(
             pa.Table.from_pylist(selections, schema=SELECTION_SCHEMA),
             temp_selection,
@@ -315,15 +288,8 @@ def select_frontal_images(root: Path, paths_file: Path, imaging_file: Path) -> i
             "selection_reasons": dict(sorted(selected_reasons.items())),
             "exclusion_reasons": dict(sorted(exclusions.items())),
         }
-        temp_summary = _temporary_path(audit_dir, ".json")
+        temp_summary = run.path(summary_path)
         temp_summary.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-        os.replace(temp_selection, selection_path)
-        os.replace(temp_summary, summary_path)
-    finally:
-        temp_selection.unlink(missing_ok=True)
-        if temp_summary is not None:
-            temp_summary.unlink(missing_ok=True)
-
     print(
         f"Selected {len(selections)} of {len(studies)} CXR studies; "
         f"excluded {sum(exclusions.values())}."

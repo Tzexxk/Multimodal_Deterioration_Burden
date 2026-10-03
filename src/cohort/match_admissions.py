@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import csv
-import os
-import sys
-import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,20 +10,26 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from tqdm import tqdm
 
-from src.cohort.audit_raw_data import (
+from src.cohort.common import (
     _config_hash,
     _file_hash,
     _file_version,
     _git_commit,
     _json_file,
+    _OutputRun,
+    _progress,
+    _protect_outputs,
     _resolve_config_path,
     _under_root,
+    _verify_run,
 )
 
 SELECTION_COLUMNS = {
-    "subject_id", "study_id", "selected_dicom_id", "acquisition_datetime"
+    "subject_id",
+    "study_id",
+    "selected_dicom_id",
+    "acquisition_datetime",
 }
 ADMISSION_COLUMNS = {"subject_id", "hadm_id", "admittime", "dischtime"}
 MATCH_STATUSES = ("unique_match", "no_match", "multiple_match")
@@ -63,14 +66,6 @@ FAILURE_SCHEMA = pa.schema(
 )
 
 
-def _temporary_path(directory: Path, suffix: str) -> Path:
-    descriptor, value = tempfile.mkstemp(
-        prefix=".cxr_admission_match_", suffix=suffix, dir=directory
-    )
-    os.close(descriptor)
-    return Path(value)
-
-
 def _parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -94,13 +89,8 @@ def _load_selections(path: Path) -> list[dict[str, Any]]:
     selections: list[dict[str, Any]] = []
     keys: set[tuple[int, int]] = set()
     study_subjects: dict[int, int] = {}
-    with tqdm(
-        total=source.metadata.num_rows,
-        desc="Read selected CXR",
-        unit="study",
-        unit_scale=True,
-        file=sys.stderr,
-        disable=not sys.stderr.isatty(),
+    with _progress(
+        "Read selected CXR", unit="study", total=source.metadata.num_rows
     ) as progress:
         for batch in source.iter_batches(
             batch_size=8192, columns=sorted(SELECTION_COLUMNS)
@@ -108,7 +98,8 @@ def _load_selections(path: Path) -> list[dict[str, Any]]:
             for row in batch.to_pylist():
                 subject_id, study_id = row["subject_id"], row["study_id"]
                 dicom_id, time_text = (
-                    row["selected_dicom_id"], row["acquisition_datetime"]
+                    row["selected_dicom_id"],
+                    row["acquisition_datetime"],
                 )
                 if (
                     type(subject_id) is not int
@@ -147,6 +138,7 @@ def _load_relevant_admissions(
     admissions: dict[int, list[dict[str, Any]]] = defaultdict(list)
     counts: Counter[str] = Counter()
     seen_hadm_ids: set[int] = set()
+    counts["duplicate_hadm_id_rows"] = 0
     with path.open("r", encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream, strict=True)
         missing = ADMISSION_COLUMNS - set(reader.fieldnames or [])
@@ -154,13 +146,7 @@ def _load_relevant_admissions(
             raise ValueError(
                 f"Admissions CSV is missing columns: {', '.join(sorted(missing))}"
             )
-        with tqdm(
-            desc="Read admissions",
-            unit="row",
-            unit_scale=True,
-            file=sys.stderr,
-            disable=not sys.stderr.isatty(),
-        ) as progress:
+        with _progress("Read admissions") as progress:
             for row_number, row in enumerate(reader, start=2):
                 counts["admissions_rows_scanned"] += 1
                 progress.update(1)
@@ -174,20 +160,22 @@ def _load_relevant_admissions(
                     raise ValueError(
                         f"Invalid admissions subject_id at line {row_number}"
                     ) from error
-                if subject_id not in subjects:
-                    continue
-                counts["relevant_admission_rows"] += 1
                 hadm_text = row["hadm_id"]
                 try:
                     hadm_id = int(hadm_text) if hadm_text else None
-                except ValueError:
+                except (TypeError, ValueError):
                     hadm_id = None
+                if hadm_id is not None:
+                    if hadm_id in seen_hadm_ids:
+                        raise ValueError(
+                            f"Duplicate admissions hadm_id {hadm_id} at line {row_number}"
+                        )
+                    seen_hadm_ids.add(hadm_id)
+                if subject_id not in subjects:
+                    continue
+                counts["relevant_admission_rows"] += 1
                 if hadm_id is None:
                     counts["invalid_hadm_id_rows"] += 1
-                elif hadm_id in seen_hadm_ids:
-                    counts["duplicate_hadm_id_rows"] += 1
-                else:
-                    seen_hadm_ids.add(hadm_id)
                 start_text, end_text = row["admittime"], row["dischtime"]
                 start, end = _parse_datetime(start_text), _parse_datetime(end_text)
                 if start is None:
@@ -212,7 +200,8 @@ def _load_relevant_admissions(
     for subject_admissions in admissions.values():
         for aware in (False, True):
             valid = [
-                row for row in subject_admissions
+                row
+                for row in subject_admissions
                 if row["_start"] is not None
                 and row["_end"] is not None
                 and _compatible(row["_start"], row["_end"])
@@ -229,9 +218,7 @@ def _load_relevant_admissions(
     return admissions, counts
 
 
-def _candidate_status(
-    t0: datetime, admission: dict[str, Any]
-) -> tuple[str, str]:
+def _candidate_status(t0: datetime, admission: dict[str, Any]) -> tuple[str, str]:
     start, end = admission["_start"], admission["_end"]
     if start is not None and end is not None:
         if not _compatible(start, end):
@@ -276,15 +263,19 @@ def _match_one(
     elif not confirmed:
         status = "no_match"
         failure = (
-            "uncertain_interval" if uncertain else
-            "outside_all_admissions" if admissions else "no_patient_admissions"
+            "uncertain_interval"
+            if uncertain
+            else "outside_all_admissions"
+            if admissions
+            else "no_patient_admissions"
         )
         chosen = None
     else:
         status = "multiple_match"
         failure = (
-            "multiple_confirmed" if len(confirmed) > 1 else
-            "uncertain_competing_admission"
+            "multiple_confirmed"
+            if len(confirmed) > 1
+            else "uncertain_competing_admission"
         )
         chosen = None
 
@@ -353,101 +344,82 @@ def match_admissions(root: Path, paths_file: Path, cohort_file: Path) -> int:
     if cohort["sample_unit"] != "study":
         raise ValueError("cohort.sample_unit must be study")
     iv_root = _resolve_config_path(paths["mimic_iv"], root, raw=True)
-    cxr_root = _resolve_config_path(paths["mimic_cxr"], root, raw=True)
     processed = _resolve_config_path(paths["processed"], root, raw=False)
     outputs = _resolve_config_path(paths["outputs"], root, raw=False)
-    raw_roots = [iv_root, cxr_root]
-    note_value = paths.get("mimic_note")
-    if (
-        isinstance(note_value, str)
-        and note_value
-        and not note_value.startswith("SET_YOUR_")
-    ):
-        raw_roots.append(_resolve_config_path(note_value, root, raw=True))
-    for destination in (processed, outputs):
-        if any(
-            destination == raw_root or destination.is_relative_to(raw_root)
-            for raw_root in raw_roots
-        ):
-            raise ValueError("Generated output must be outside all raw data roots")
-    selected_path = processed / "index" / "study_image_selection.parquet"
-    admissions_path = _under_root(
-        iv_root, cohort["admission_matching"]["admissions_path"]
-    )
-    if not selected_path.is_file():
-        raise FileNotFoundError(f"Missing selected CXR table: {selected_path}")
-    if not admissions_path.is_file():
-        raise FileNotFoundError(f"Missing admissions CSV: {admissions_path}")
+    _protect_outputs(paths, root, processed, outputs)
+    with _OutputRun(outputs, 4, processed) as run:
+        _verify_run(outputs, 3, processed / "index" / "study_image_selection.parquet")
+        selected_path = processed / "index" / "study_image_selection.parquet"
+        admissions_path = _under_root(
+            iv_root, cohort["admission_matching"]["admissions_path"]
+        )
+        if not selected_path.is_file():
+            raise FileNotFoundError(f"Missing selected CXR table: {selected_path}")
+        if not admissions_path.is_file():
+            raise FileNotFoundError(f"Missing admissions CSV: {admissions_path}")
 
-    selections = _load_selections(selected_path)
-    subjects = {row["subject_id"] for row in selections}
-    admissions, admission_counts = _load_relevant_admissions(
-        admissions_path, subjects
-    )
-    matches: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    statuses: Counter[str] = Counter()
-    reasons: Counter[str] = Counter()
-    with tqdm(
-        total=len(selections),
-        desc="Match CXR studies",
-        unit="study",
-        unit_scale=True,
-        file=sys.stderr,
-        disable=not sys.stderr.isatty(),
-    ) as progress:
-        for selected in sorted(
-            selections, key=lambda row: (row["subject_id"], row["study_id"])
-        ):
-            match, detail = _match_one(
-                selected, admissions.get(selected["subject_id"], [])
-            )
-            matches.append(match)
-            failures.extend(detail)
-            statuses[match["match_status"]] += 1
-            if match["failure_reason"]:
-                reasons[match["failure_reason"]] += 1
-            progress.update(1)
-    if len(matches) != len(selections) or sum(statuses.values()) != len(selections):
-        raise ValueError("Match status counts do not cover every selected CXR")
-    if set(statuses) - set(MATCH_STATUSES):
-        raise ValueError("Unexpected admission match status")
-    if len({(row["subject_id"], row["study_id"]) for row in matches}) != len(matches):
-        raise ValueError("Duplicate study in admission match output")
-    if len({(row["subject_id"], row["study_id"]) for row in failures}) != (
-        statuses["no_match"] + statuses["multiple_match"]
-    ):
-        raise ValueError("Failure details do not cover every non-unique match")
-    for row in matches:
-        if row["match_status"] == "unique_match":
-            admitted = _parse_datetime(row["admittime"])
-            t0 = _parse_datetime(row["t0"])
-            discharged = _parse_datetime(row["dischtime"])
-            if (
-                row["hadm_id"] is None
-                or row["n_confirmed_matches"] != 1
-                or row["n_uncertain_candidates"] != 0
-                or admitted is None
-                or t0 is None
-                or discharged is None
+        selections = _load_selections(selected_path)
+        subjects = {row["subject_id"] for row in selections}
+        admissions, admission_counts = _load_relevant_admissions(
+            admissions_path, subjects
+        )
+        matches: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
+        statuses: Counter[str] = Counter()
+        reasons: Counter[str] = Counter()
+        with _progress(
+            "Match CXR studies", unit="study", total=len(selections)
+        ) as progress:
+            for selected in sorted(
+                selections, key=lambda row: (row["subject_id"], row["study_id"])
             ):
-                raise ValueError("Invalid unique admission match")
-            if not admitted <= t0 < discharged:
-                raise ValueError("Unique admission interval does not contain t0")
-        elif row["hadm_id"] is not None:
-            raise ValueError("Non-unique admission match contains a hadm_id")
+                match, detail = _match_one(
+                    selected, admissions.get(selected["subject_id"], [])
+                )
+                matches.append(match)
+                failures.extend(detail)
+                statuses[match["match_status"]] += 1
+                if match["failure_reason"]:
+                    reasons[match["failure_reason"]] += 1
+                progress.update(1)
+        if len(matches) != len(selections) or sum(statuses.values()) != len(selections):
+            raise ValueError("Match status counts do not cover every selected CXR")
+        if set(statuses) - set(MATCH_STATUSES):
+            raise ValueError("Unexpected admission match status")
+        if len({(row["subject_id"], row["study_id"]) for row in matches}) != len(
+            matches
+        ):
+            raise ValueError("Duplicate study in admission match output")
+        if len({(row["subject_id"], row["study_id"]) for row in failures}) != (
+            statuses["no_match"] + statuses["multiple_match"]
+        ):
+            raise ValueError("Failure details do not cover every non-unique match")
+        for row in matches:
+            if row["match_status"] == "unique_match":
+                admitted = _parse_datetime(row["admittime"])
+                t0 = _parse_datetime(row["t0"])
+                discharged = _parse_datetime(row["dischtime"])
+                if (
+                    row["hadm_id"] is None
+                    or row["n_confirmed_matches"] != 1
+                    or row["n_uncertain_candidates"] != 0
+                    or admitted is None
+                    or t0 is None
+                    or discharged is None
+                ):
+                    raise ValueError("Invalid unique admission match")
+                if not admitted <= t0 < discharged:
+                    raise ValueError("Unique admission interval does not contain t0")
+            elif row["hadm_id"] is not None:
+                raise ValueError("Non-unique admission match contains a hadm_id")
 
-    index_dir = processed / "index"
-    audit_dir = outputs / "audit"
-    index_dir.mkdir(parents=True, exist_ok=True)
-    audit_dir.mkdir(parents=True, exist_ok=True)
-    match_path = index_dir / "cxr_admission_matches.parquet"
-    failure_path = audit_dir / "cxr_admission_match_failures.parquet"
-    summary_path = audit_dir / "admission_match_summary.csv"
-    temp_match = _temporary_path(index_dir, ".parquet")
-    temp_failure = _temporary_path(audit_dir, ".parquet")
-    temp_summary: Path | None = None
-    try:
+        index_dir = processed / "index"
+        audit_dir = outputs / "audit"
+        match_path = index_dir / "cxr_admission_matches.parquet"
+        failure_path = audit_dir / "cxr_admission_match_failures.parquet"
+        summary_path = audit_dir / "admission_match_summary.csv"
+        temp_match = run.path(match_path)
+        temp_failure = run.path(failure_path)
         pq.write_table(
             pa.Table.from_pylist(matches, schema=MATCH_SCHEMA),
             temp_match,
@@ -494,16 +466,8 @@ def match_admissions(root: Path, paths_file: Path, cohort_file: Path) -> int:
                 for key, count in sorted(admission_counts.items())
             }
         )
-        temp_summary = _temporary_path(audit_dir, ".csv")
+        temp_summary = run.path(summary_path)
         _write_summary(temp_summary, summary)
-        os.replace(temp_match, match_path)
-        os.replace(temp_failure, failure_path)
-        os.replace(temp_summary, summary_path)
-    finally:
-        temp_match.unlink(missing_ok=True)
-        temp_failure.unlink(missing_ok=True)
-        if temp_summary is not None:
-            temp_summary.unlink(missing_ok=True)
     print(
         f"Matched {len(selections)} selected CXR studies: "
         + ", ".join(f"{status}={statuses[status]}" for status in MATCH_STATUSES)
