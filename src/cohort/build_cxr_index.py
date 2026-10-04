@@ -17,6 +17,7 @@ import pyarrow.parquet as pq
 from src.cohort.common import (
     _acquisition_time,
     _config_hash,
+    _csv_reader,
     _file_hash,
     _file_version,
     _git_commit,
@@ -57,10 +58,12 @@ STUDY_COLUMNS = {"subject_id", "study_id", "path"}
 TIME_SOURCES = {"AcquisitionDateTime", "StudyDate+StudyTime", "missing", "not_assessed"}
 
 
-def _checked_csv(path: Path, required: set[str]) -> tuple[Any, csv.DictReader]:
+def _checked_csv(
+    path: Path, required: set[str], check: dict | None = None
+) -> tuple[Any, csv.DictReader]:
     stream = path.open("r", encoding="utf-8-sig", newline="")
     try:
-        reader = csv.DictReader(stream, strict=True)
+        reader = _csv_reader(stream, check)
         missing = required - set(reader.fieldnames or [])
         if missing:
             raise ValueError(
@@ -72,9 +75,9 @@ def _checked_csv(path: Path, required: set[str]) -> tuple[Any, csv.DictReader]:
         raise
 
 
-def _study_keys(path: Path) -> set[tuple[int, int]]:
+def _study_keys(path: Path, check: dict | None = None) -> set[tuple[int, int]]:
     keys: set[tuple[int, int]] = set()
-    stream, reader = _checked_csv(path, STUDY_COLUMNS)
+    stream, reader = _checked_csv(path, STUDY_COLUMNS, check)
     with stream:
         for line, row in enumerate(reader, start=2):
             if None in row or not row.get("path"):
@@ -213,7 +216,7 @@ def build_cxr_index(root: Path, paths_file: Path, imaging_file: Path) -> int:
         if not dicom_dir.is_dir():
             raise FileNotFoundError(f"Missing DICOM directory: {dicom_dir}")
 
-        studies = _study_keys(study_path)
+        studies = _study_keys(study_path, run.check_csv(study_path))
         scanned, walk_errors = _scan_physical_dicom(
             cxr_root, {suffix.lower() for suffix in imaging["dicom_suffixes"]}
         )
@@ -275,7 +278,9 @@ def build_cxr_index(root: Path, paths_file: Path, imaging_file: Path) -> int:
                 image_progress.update(1)
             pending.clear()
 
-        stream, reader = _checked_csv(record_path, RECORD_COLUMNS)
+        stream, reader = _checked_csv(
+            record_path, RECORD_COLUMNS, run.check_csv(record_path)
+        )
         with (
             stream,
             ThreadPoolExecutor(max_workers=workers) as pool,
@@ -344,6 +349,7 @@ def build_cxr_index(root: Path, paths_file: Path, imaging_file: Path) -> int:
 
         prior_count = _prior_audit_count(audit_dir / "audit_report.md")
         summary = {
+            "csv_tail_checks": run.csv_tail_summary(),
             "started_utc": started.isoformat(),
             "finished_utc": datetime.now(timezone.utc).isoformat(),
             "git_commit": _git_commit(root),

@@ -1,4 +1,20 @@
 {
+  "burden_v2": {
+    "memory_limit": "2GB",
+    "tables": {
+      "patients": "hosp/patients.csv",
+      "admissions": "hosp/admissions.csv",
+      "transfers": "hosp/transfers.csv",
+      "icustays": "icu/icustays.csv",
+      "d_items": "icu/d_items.csv",
+      "procedureevents": "icu/procedureevents.csv",
+      "chartevents": "icu/chartevents.csv",
+      "emar": "hosp/emar.csv",
+      "emar_detail": "hosp/emar_detail.csv",
+      "pharmacy": "hosp/pharmacy.csv",
+      "prescriptions": "hosp/prescriptions.csv"
+    }
+  },
   "raw_audit": {
     "lab_sample_rows": 10000,
     "lab_time_fields": ["charttime", "storetime"],

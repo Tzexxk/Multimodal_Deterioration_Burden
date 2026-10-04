@@ -272,6 +272,7 @@ def select_frontal_images(root: Path, paths_file: Path, imaging_file: Path) -> i
                 "Written selection row count differs from validated studies"
             )
         summary = {
+            "csv_tail_checks": run.csv_tail_summary(),
             "started_utc": started.isoformat(),
             "finished_utc": datetime.now(timezone.utc).isoformat(),
             "git_commit": _git_commit(root),

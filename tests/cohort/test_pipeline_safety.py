@@ -266,6 +266,55 @@ class PipelineSafetyTests(unittest.TestCase):
                     self.assertEqual(log["counts"]["indexed_paths_existing"], 1)
                     self.assertIn("dicom_readability.csv", log["output_sha256"])
 
+    def test_csv_tail_reports_and_skipping_across_steps(self) -> None:
+        paths, imaging, ehr, cohort = self.inputs(self.root)
+        inputs = [
+            self.root / "cxr/cxr-record-list.csv",
+            self.root / "cxr/cxr-study-list.csv",
+            self.root / "iv/hosp/admissions.csv",
+        ]
+        for path in inputs:
+            with path.open("ab") as stream:
+                stream.write(b"999")
+        runners = [
+            lambda: run_audit(self.root, paths, imaging, ehr),
+            lambda: build_cxr_index(self.root, paths, imaging),
+            lambda: select_frontal_images(self.root, paths, imaging),
+            lambda: match_admissions(self.root, paths, cohort),
+        ]
+        outputs = self.root / "outputs"
+        with (
+            patch.dict(sys.modules, {"pydicom": SimpleNamespace(dcmread=fake_read)}),
+            redirect_stdout(io.StringIO()),
+        ):
+            for step, runner in enumerate(runners, 1):
+                self.assertEqual(runner(), 0)
+                _verify_run(outputs, step)
+                report = outputs / f"audit/step_{step:02d}_csv_tail_checks.csv"
+                with report.open(newline="") as stream:
+                    rows = list(csv.DictReader(stream))
+                if step == 3:
+                    self.assertEqual(rows[0]["status"], "no_csv_inputs")
+                    summary = _json_file(
+                        outputs / "audit/study_image_selection_summary.json"
+                    )
+                    self.assertEqual(
+                        summary["csv_tail_checks"]["checked_file_count"], 0
+                    )
+                else:
+                    incomplete = [row for row in rows if row["status"] == "incomplete"]
+                    self.assertEqual(len(incomplete), {1: 3, 2: 2, 4: 1}[step])
+                    self.assertEqual(
+                        sum(int(row["skipped_rows"]) for row in rows),
+                        {1: 1, 2: 2, 4: 1}[step],
+                    )
+        self.assertEqual(
+            pq.read_table(
+                self.root / "processed/index/cxr_admission_matches.parquet"
+            ).to_pylist()[0]["match_status"],
+            "unique_match",
+        )
+
     def test_full_pipeline_rerun_and_failed_publication(self) -> None:
         paths, imaging, ehr, cohort = self.inputs(self.root)
         outputs, processed = self.root / "outputs", self.root / "processed"

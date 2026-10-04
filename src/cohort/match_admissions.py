@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 
 from src.cohort.common import (
     _config_hash,
+    _csv_reader,
     _file_hash,
     _file_version,
     _git_commit,
@@ -133,14 +134,14 @@ def _load_selections(path: Path) -> list[dict[str, Any]]:
 
 
 def _load_relevant_admissions(
-    path: Path, subjects: set[int]
+    path: Path, subjects: set[int], check: dict | None = None
 ) -> tuple[dict[int, list[dict[str, Any]]], Counter[str]]:
     admissions: dict[int, list[dict[str, Any]]] = defaultdict(list)
     counts: Counter[str] = Counter()
     seen_hadm_ids: set[int] = set()
     counts["duplicate_hadm_id_rows"] = 0
     with path.open("r", encoding="utf-8-sig", newline="") as stream:
-        reader = csv.DictReader(stream, strict=True)
+        reader = _csv_reader(stream, check)
         missing = ADMISSION_COLUMNS - set(reader.fieldnames or [])
         if missing:
             raise ValueError(
@@ -361,7 +362,7 @@ def match_admissions(root: Path, paths_file: Path, cohort_file: Path) -> int:
         selections = _load_selections(selected_path)
         subjects = {row["subject_id"] for row in selections}
         admissions, admission_counts = _load_relevant_admissions(
-            admissions_path, subjects
+            admissions_path, subjects, run.check_csv(admissions_path)
         )
         matches: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
@@ -436,6 +437,10 @@ def match_admissions(root: Path, paths_file: Path, cohort_file: Path) -> int:
             raise ValueError("Written admission failure row count is incorrect")
         finished = datetime.now(timezone.utc)
         summary: dict[str, Any] = {
+            **{
+                f"csv_tail_{key}": value
+                for key, value in run.csv_tail_summary().items()
+            },
             "started_utc": started.isoformat(),
             "finished_utc": finished.isoformat(),
             "git_commit": _git_commit(root),

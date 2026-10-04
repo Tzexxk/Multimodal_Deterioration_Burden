@@ -18,6 +18,7 @@ from typing import Any
 from src.cohort.common import (
     _acquisition_time,
     _config_hash,
+    _csv_reader,
     _file_hash,
     _file_version,
     _git_commit,
@@ -64,7 +65,9 @@ SUMMARY_COLUMNS = ["category", "value", "count", "denominator", "proportion"]
 EHR_COLUMNS = ["metric", "count", "denominator", "proportion", "detail"]
 
 
-def _csv_screen(path: Path, source: str, required: list[str]) -> dict[str, Any]:
+def _csv_screen(
+    path: Path, source: str, required: list[str], check: dict | None = None
+) -> dict[str, Any]:
     row: dict[str, Any] = {
         "source": source,
         "file": str(path),
@@ -82,7 +85,7 @@ def _csv_screen(path: Path, source: str, required: list[str]) -> dict[str, Any]:
     row["size_bytes"] = path.stat().st_size
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as stream:
-            reader = csv.DictReader(stream, strict=True)
+            reader = _csv_reader(stream, check)
             columns = reader.fieldnames
             if not columns:
                 row["failure_reason"] = "empty_or_missing_header"
@@ -216,7 +219,7 @@ def _summary_row(
 
 
 def _screen_lab_times(
-    path: Path, sample_limit: int, fields: list[str]
+    path: Path, sample_limit: int, fields: list[str], check: dict | None = None
 ) -> tuple[list[dict[str, Any]], str]:
     """Inspect only the first N CSV records; never load/scan the full CSV."""
     counts: Counter[str] = Counter()
@@ -224,7 +227,7 @@ def _screen_lab_times(
     seen = 0
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as stream:
-            reader = csv.DictReader(stream, strict=True)
+            reader = _csv_reader(stream, check)
             if not set(fields).issubset(reader.fieldnames or []):
                 return [], "missing_lab_time_columns"
             for row in islice(reader, sample_limit):
@@ -356,17 +359,23 @@ def run_audit(root: Path, paths_file: Path, imaging_file: Path, ehr_file: Path) 
                     "dicom_id",
                     "path",
                 ],
+                run.check_csv(record_path),
             ),
             _csv_screen(
                 study_path,
                 "MIMIC-CXR",
                 ["subject_id", "study_id", "path"],
+                run.check_csv(study_path),
             ),
         ]
         for name, specification in required.items():
             path = _under_root(iv_root, specification["path"])
             input_files[name] = path
-            file_rows.append(_csv_screen(path, "MIMIC-IV", specification["columns"]))
+            file_rows.append(
+                _csv_screen(
+                    path, "MIMIC-IV", specification["columns"], run.check_csv(path)
+                )
+            )
         if note_root is not None:
             note_file = _under_root(note_root, "note/radiology.csv")
             input_files["radiology_optional"] = note_file
@@ -375,6 +384,7 @@ def run_audit(root: Path, paths_file: Path, imaging_file: Path, ehr_file: Path) 
                     note_file,
                     "MIMIC-IV-NOTE (optional)",
                     ["subject_id", "charttime", "storetime"],
+                    run.check_csv(note_file),
                 )
             )
         local_files, walk_errors = _scan_physical_dicom(
@@ -424,7 +434,7 @@ def run_audit(root: Path, paths_file: Path, imaging_file: Path, ehr_file: Path) 
                     with record_path.open(
                         "r", encoding="utf-8-sig", newline=""
                     ) as index:
-                        reader = csv.DictReader(index, strict=True)
+                        reader = _csv_reader(index, run.check_csv(record_path))
 
                         def process(index_row: dict[str, str]) -> dict[str, Any]:
                             return _audit_index_row(
@@ -530,6 +540,7 @@ def run_audit(root: Path, paths_file: Path, imaging_file: Path, ehr_file: Path) 
                 lab_file,
                 int(ehr["lab_sample_rows"]),
                 ehr["lab_time_fields"],
+                run.check_csv(lab_file),
             )
         else:
             ehr_rows, ehr_error = [], "labevents_file_or_columns_unavailable"
@@ -622,6 +633,12 @@ def run_audit(root: Path, paths_file: Path, imaging_file: Path, ehr_file: Path) 
             "full-cohort lab missingness, or positive patient counts.",
             "- See ehr_time_field_screen.csv for EHR metrics and denominators.",
             "",
+            "## CSV Tail Checks",
+            "",
+            f"- Results: {json.dumps(run.csv_tail_summary(), sort_keys=True)}",
+            "- Incomplete final records are skipped when encountered. Review file sources.",
+            "- A complete final record does not establish whole-dataset coverage.",
+            "",
             "## Input Versions (Size and Modification Time, Not Content Checksums)",
             "",
             "```json",
@@ -642,6 +659,7 @@ def run_audit(root: Path, paths_file: Path, imaging_file: Path, ehr_file: Path) 
             )
         report_path = run.path(audit_dir / "audit_report.md")
         report_path.write_text("\n".join(report) + "\n", encoding="utf-8")
+        run.write_csv_tail_report()
         output_files = [
             run.path(audit_dir / name)
             for name in (
@@ -651,10 +669,12 @@ def run_audit(root: Path, paths_file: Path, imaging_file: Path, ehr_file: Path) 
                 "cxr_view_distribution.csv",
                 "ehr_time_field_screen.csv",
                 "audit_report.md",
+                "step_01_csv_tail_checks.csv",
             )
         ]
         log_dir = output_root / "logs"
         run_log = {
+            "csv_tail_checks": run.csv_tail_summary(),
             "started_utc": started.isoformat(),
             "finished_utc": datetime.now(timezone.utc).isoformat(),
             "git_commit": _git_commit(root),

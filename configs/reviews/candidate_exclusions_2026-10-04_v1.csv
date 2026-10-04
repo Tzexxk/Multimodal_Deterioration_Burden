@@ -1,0 +1,2 @@
+sample_id,reason,source_record_keys,reviewer,rationale,version
+p10146602_h21847933_s51154665,Unable to verify care unit at t0,"[""admissions:35782ce61ef577d75cbdb2fa09da147d202185a5dd631095b8f7cd54998619e5"", ""transfers:b5540aff11efc0f2983f16d5325878e3e9ce7b7aa47748388a9a567dd4c4dc4b""]",ZE Xiaokang,Study time is 2181-11-30 11:20:55.890000; the first linked care-unit interval starts at 2181-11-30 12:23:07. Approved exclusion of this study only on 2026-10-04.,candidate_exclusions_2026-10-04_v1
