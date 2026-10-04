@@ -9,6 +9,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import duckdb
@@ -40,7 +41,7 @@ def approved_dictionary():
             else [canonical]
         )
         for unit in units:
-            row = dict.fromkeys(review.STRING_FIELDS, "")
+            row: dict[str, Any] = dict.fromkeys(review.STRING_FIELDS, "")
             row.update(
                 itemid=int(item),
                 keep=True,
@@ -216,7 +217,7 @@ class Step10BTests(unittest.TestCase):
         self.write_sources()
 
     def lab(self, identifier, **changes):
-        row = dict.fromkeys(lab.LAB_REQUIRED + lab.LAB_OPTIONAL, "")
+        row: dict[str, Any] = dict.fromkeys([*lab.LAB_REQUIRED, *lab.LAB_OPTIONAL], "")
         row.update(
             labevent_id=identifier,
             subject_id="1",
@@ -245,7 +246,7 @@ class Step10BTests(unittest.TestCase):
             )
         _write_csv(
             self.raw / "hosp/labevents.csv",
-            lab.LAB_REQUIRED + lab.LAB_OPTIONAL,
+            [*lab.LAB_REQUIRED, *lab.LAB_OPTIONAL],
             self.labs,
         )
         _write_csv(
@@ -341,7 +342,7 @@ class Step10BTests(unittest.TestCase):
         self.assertEqual(
             connection.execute(
                 "SELECT count(*) FROM cleaned WHERE labevent_id='2'"
-            ).fetchone()[0],
+            ).fetchall()[0][0],
             2,
         )
 
@@ -359,7 +360,7 @@ class Step10BTests(unittest.TestCase):
         self.assertEqual(
             connection.execute(
                 "SELECT count(*) FROM lab_trace WHERE disposition='superseded_revision'"
-            ).fetchone()[0],
+            ).fetchall()[0][0],
             1,
         )
 
@@ -437,7 +438,7 @@ class Step10BTests(unittest.TestCase):
         schema = step.schema_for(self.rules, "ehr_features_v1")
         self.assertEqual(len(schema["numeric_features"]), 152)
         self.assertEqual(len(schema["categorical_features"]), 5)
-        rows = [{"sample_id": k} for k in ["a", "b", "c"]]
+        rows: list[dict[str, Any]] = [{"sample_id": k} for k in ["a", "b", "c"]]
         table = step.float32_table(rows, schema)
         step.validate_wide(table, self.cohort, schema)
         self.assertTrue(math.isnan(table["age_at_t0"][0].as_py()))

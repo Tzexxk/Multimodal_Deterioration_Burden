@@ -12,6 +12,7 @@ import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import numpy as np
@@ -67,7 +68,7 @@ class TrainingValidationTests(unittest.TestCase):
             patient, admission, study = 10000 + i, 20000 + i, 50000 + i
             key = f"p{patient}_h{admission}_s{study}"
             relative = f"images/p10/p{patient}/s{study}.npy"
-            row = dict.fromkeys(step.EVENTS, 0)
+            row: dict[str, Any] = dict.fromkeys(step.EVENTS, 0)
             row.update(
                 sample_id=key,
                 subject_id=patient,
@@ -210,7 +211,7 @@ class TrainingValidationTests(unittest.TestCase):
         )
         rows = []
         for r in sample_rows:
-            row = dict(
+            row: dict[str, Any] = dict(
                 sample_id=r["sample_id"],
                 age_at_t0=50,
                 hours_from_admission=48,
@@ -271,7 +272,7 @@ class TrainingValidationTests(unittest.TestCase):
             ["split", "metric", "value", "unit", "denominator"],
             self.summaries,
         )
-        self.freeze = dict(
+        self.freeze: dict[str, Any] = dict(
             package_file_sha256=self.hashes(),
             binding=dict(
                 configuration_sha256={}, source_sha256={}, code_sha256="synthetic"
@@ -398,7 +399,7 @@ class TrainingValidationTests(unittest.TestCase):
 
     def raw_lab(self, **changes):
         first = self.cohort_rows[0]
-        row = dict(
+        row: dict[str, Any] = dict(
             lab_record_key="record1",
             labevent_id="1",
             subject_id=str(first["subject_id"]),

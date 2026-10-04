@@ -7,6 +7,7 @@ import hashlib
 import json
 import tempfile
 from collections import defaultdict
+from collections.abc import Sequence
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
@@ -745,7 +746,7 @@ def reports(
                     "SELECT count(DISTINCT source_record_key) FROM evidence WHERE horizon_hours=? "
                     "AND component=? AND qualifies=1",
                     [horizon, component],
-                ).fetchone()[0]
+                ).fetchall()[0][0]
                 summaries.append(
                     dict(
                         horizon_hours=horizon,
@@ -1033,11 +1034,11 @@ def reports(
         f"OR C<>{COMPONENTS[4]} OR D<>{COMPONENTS[5]} "
         "OR phys_death<>cast(R=1 OR C=1 OR D=1 AS INTEGER) OR high_burden<>cast(burden_score>=3 AS INTEGER) "
         "OR candidate_status<>'eligible')"
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     outside = connection.execute(
         "SELECT count(*) FROM evidence e JOIN wide w USING (sample_id,horizon_hours) "
         "WHERE qualifies=1 AND (e.event_time IS NULL OR e.event_time<=w.t0 OR e.event_time>w.observation_end)"
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     if bad or outside:
         raise ValueError("Audit score or positive-event boundary validation failed")
     for component in COMPONENTS:
@@ -1053,7 +1054,7 @@ def reports(
             f"w.{component}_first_event_time IS DISTINCT FROM (CASE WHEN coalesce(d.pending,false) "
             "THEN NULL ELSE d.first_time END))",
             [component],
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         if inconsistent:
             raise ValueError(
                 f"Evidence does not reproduce wide-table component: {component}"
@@ -1069,7 +1070,7 @@ def reports(
         ),
         "unresolved_evidence_count": connection.execute(
             "SELECT count(*) FROM evidence WHERE qualifies IS NULL"
-        ).fetchone()[0],
+        ).fetchall()[0][0],
     }
 
 
@@ -1149,7 +1150,7 @@ def audit_burden_labels(
         ):
             if connection.execute(
                 f"SELECT count(*) FROM (SELECT {field} FROM {table} GROUP BY {field} HAVING count(*)>1)"
-            ).fetchone()[0]:
+            ).fetchall()[0][0]:
                 raise ValueError(f"Duplicate source key: {table}/{field}")
         dictionaries_confirmed, handling_confirmed = dictionary_reports(
             connection, run, audit_dir, rules
@@ -1192,7 +1193,7 @@ def audit_burden_labels(
         )
         sinks = {}
 
-        def sink(key: str, destination: Path, columns: list[str]) -> ParquetSink:
+        def sink(key: str, destination: Path, columns: Sequence[str]) -> ParquetSink:
             value = ParquetSink(run.path(destination), columns)
             stack.callback(value.close)
             sinks[key] = value
@@ -1826,19 +1827,21 @@ def audit_burden_labels(
                 **interval_counts,
             },
             "source_retained_row_counts": {
-                name: connection.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
+                name: connection.execute(f"SELECT count(*) FROM {name}").fetchall()[0][
+                    0
+                ]
                 for name in TABLE_COLUMNS
             },
             "emar_join_counts": {
                 "retained_emar_rows": connection.execute(
                     "SELECT count(*) FROM emar"
-                ).fetchone()[0],
+                ).fetchall()[0][0],
                 "unique_emar_ids": connection.execute(
                     "SELECT count(DISTINCT emar_id) FROM emar"
-                ).fetchone()[0],
+                ).fetchall()[0][0],
                 "retained_detail_rows": connection.execute(
                     "SELECT count(*) FROM emar_detail"
-                ).fetchone()[0],
+                ).fetchall()[0][0],
                 "aggregated_administration_rows": sinks["medications"].count,
             },
             **summary,

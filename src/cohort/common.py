@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -444,7 +445,9 @@ def _scan_physical_dicom(
     return files, errors
 
 
-def _write_csv(path: Path, columns: list[str], rows: list[dict[str, Any]]) -> None:
+def _write_csv(
+    path: Path, columns: Sequence[str], rows: Iterable[Mapping[str, Any]]
+) -> None:
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()

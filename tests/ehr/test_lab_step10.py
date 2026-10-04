@@ -112,7 +112,7 @@ class LaboratoryTests(unittest.TestCase):
         self.addCleanup(silence.__exit__, None, None, None)
 
     def lab(self, identifier: str, **changes) -> dict:
-        row = dict.fromkeys(audit.LAB_REQUIRED + audit.LAB_OPTIONAL, "")
+        row = dict.fromkeys([*audit.LAB_REQUIRED, *audit.LAB_OPTIONAL], "")
         row.update(
             labevent_id=identifier,
             subject_id="1",
@@ -143,7 +143,9 @@ class LaboratoryTests(unittest.TestCase):
             self.admissions,
         )
         _write_csv(
-            hosp / "labevents.csv", audit.LAB_REQUIRED + audit.LAB_OPTIONAL, self.labs
+            hosp / "labevents.csv",
+            [*audit.LAB_REQUIRED, *audit.LAB_OPTIONAL],
+            self.labs,
         )
 
     @property
@@ -746,7 +748,7 @@ class LaboratoryTests(unittest.TestCase):
         second = dict(self.lab("1"), order_provider_id="synthetic_provider_b")
         _write_csv(
             path,
-            audit.LAB_REQUIRED + audit.LAB_OPTIONAL + ["order_provider_id"],
+            [*audit.LAB_REQUIRED, *audit.LAB_OPTIONAL, "order_provider_id"],
             [first, second],
         )
         self.run_mode()

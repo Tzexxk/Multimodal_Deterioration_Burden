@@ -1,0 +1,102 @@
+{
+  "review_version": "lab_dictionary_reviews_2026-10-05_v1_rebuild_v1",
+  "original_approval_manifest_sha256": "03b0192521fbae39ed401646f149c1164e06515424649fa569d1cd82d07a270b",
+  "original_audit_fingerprint": "700ce38be57b4d4e1bf616744cd2d60d25e3eefc8f35ef756abf2d5fa9b3eb74",
+  "audit_fingerprint": "8ce355dfa7f55fc1a2734084c7cc4b6b5b8997bea28ab4c7fb3f937085e70d36",
+  "audit_manifest_sha256": "4c84382ae42e580b4999784148af81516468370e4bcc32561cd5ea505344590d",
+  "scope_inventory_sha256": "331b35f1a035759989b7f9cd5b0b1c62fbd46e41a3f2a051175684beba250780",
+  "source_binding": {
+    "cohort": {
+      "cohort_version": "burden_v2_h72_r01",
+      "horizon_hours": 72,
+      "cohort_freeze_sha256": "77f7ca6f48cd420f9d30fa04828c13ff32610b31444f4bfce8e7997c1c4a087d",
+      "cohort_sha256": "dad9d29f0b35a2855c152fb77396f2116eb8e9ca3283c421bc9f7695b2cf17ae",
+      "cohort_audit_sha256": "b47e684a633a98ddf4b77ae064f9eaf6fdeedd21b7113e0e06274374351a732f",
+      "original_cohort_freeze_run_id": "4f9ea14a347e42cc9decfb0f4c537149",
+      "cohort_source_fingerprint": "5dea681d3399ddfc4c1dfe89ddb5821c81345ccf9f91a5f56ee82b149dce9ee1"
+    },
+    "split": {
+      "split_version": "burden_v2_h72_r01_split_v1",
+      "original_split_run_id": "19c0d85f5a10494abc1e587ddc0ea56a",
+      "split_freeze_sha256": "e0e623d47a4259f2e91a1ab663a6f9d89e48580559a03a2c40d3f429e5017aef",
+      "patient_split_sha256": "132e0fa4e8e6b06a46898bd7a2dfe5a923aa5e2c998b926e7ede17727faa7b7b",
+      "source_fingerprint": "605b644939d23cf68b7e94becc6ec33f68207dd9153c38130792bae2475a79d0"
+    },
+    "source_versions": {
+      "d_labitems": {
+        "exists": true,
+        "size_bytes": 64663,
+        "modified_utc": "2026-10-03T16:32:37.183079+00:00"
+      },
+      "labevents": {
+        "exists": true,
+        "size_bytes": 18402851720,
+        "modified_utc": "2026-10-03T16:34:18.972524+00:00"
+      },
+      "admissions": {
+        "exists": true,
+        "size_bytes": 94156458,
+        "modified_utc": "2026-10-03T16:32:36.340221+00:00"
+      }
+    },
+    "source_paths": {
+      "d_labitems": "G:\\BN5212_Dataset\\MIMIC-IV\\hosp\\d_labitems.csv",
+      "labevents": "G:\\BN5212_Dataset\\MIMIC-IV\\hosp\\labevents.csv",
+      "admissions": "G:\\BN5212_Dataset\\MIMIC-IV\\hosp\\admissions.csv"
+    },
+    "dictionary_source_sha256": "f3182dbace857d8cd3439ebbd2095d3128c1751cb42b12e3e4208bdc4b363567",
+    "configuration_sha256": "73740b0b5f91f057f5b4354388387eb4c084eefec3d26466f6e10dc427284dd8",
+    "settings": {
+      "audit_version": "lab_audit_v1",
+      "algorithm_version": "lab_audit_review_v1",
+      "cohort_version": "burden_v2_h72_r01",
+      "split_version": "burden_v2_h72_r01_split_v1",
+      "lookback_hours": 24,
+      "memory_limit": "2GB",
+      "batch_item_limit": 10,
+      "example_limit": 5,
+      "comment_max_chars": 512,
+      "reviewer": "ZE Xiaokang",
+      "tables": {
+        "d_labitems": "hosp/d_labitems.csv",
+        "labevents": "hosp/labevents.csv",
+        "admissions": "hosp/admissions.csv"
+      }
+    },
+    "code_sha256": "6277c292cf978bf6df600cca4bbe788067d18aa8e315f8c1f7d7dbfaaafeeb97",
+    "runtime_versions": {
+      "python": "3.11.16",
+      "duckdb": "1.5.5",
+      "pyarrow": "24.0.0"
+    },
+    "cache_filter": "all laboratory records and all admissions of frozen-cohort patients; inventory by inclusive charttime study windows"
+  },
+  "review_files_sha256": {
+    "lab_dictionary_reviews_2026-10-05_v1_rebuild_v1.csv": "2064be2d07f5797a34bfd99f48a1177c9baded9be8f102200eff49440d11d998",
+    "lab_dictionary_scope_2026-10-05_v1_rebuild_v1.csv": "1ec53d1ba0fdca9d984605cfda47bb2bbf5001773c7d188b80f8705c42522b9f"
+  },
+  "evidence_comparison": {
+    "counts_and_batches_identical": true,
+    "reference_reports_row_multisets_identical": [
+      "lab_availability_summary.csv",
+      "lab_time_failures.csv",
+      "lab_duplicate_reports.csv",
+      "lab_examples.csv",
+      "lab_specimen_evidence.csv",
+      "lab_specimen_failures.csv",
+      "lab_window_failures.csv",
+      "review_batches.csv"
+    ],
+    "clinical_inventory_identical": true,
+    "raw_mean_rounding_changed_branches": 29,
+    "raw_mean_max_ulp_difference": 5.0,
+    "unit_conflicts_identical_after_list_order_normalization": true
+  },
+  "approved_itemids_retained": 25,
+  "retained_unit_branches": 26,
+  "completed_unit_branches": 370,
+  "method": "Preserve original clinical decisions, reviewer, review date and rationale; change only audit fingerprint, scope hash/key and input version.",
+  "review_mode_pending": true,
+  "dictionary_frozen": false,
+  "ehr_features_ready": false
+}

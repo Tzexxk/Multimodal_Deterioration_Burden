@@ -7,11 +7,12 @@ import hashlib
 import json
 import math
 import warnings
+from typing import Any
 
 import numpy as np
 from PIL import Image
 from pydicom.dataset import Dataset
-from pydicom.pixels import (
+from pydicom.pixels.processing import (
     apply_modality_lut,
     apply_presentation_lut,
     apply_voi,
@@ -132,7 +133,9 @@ def _display_dataset(dataset: Dataset) -> Dataset:
         "PresentationLUTShape",
     ):
         if name in dataset:
-            result.add(copy.deepcopy(dataset.data_element(name)))
+            element = dataset.data_element(name)
+            if element is not None:
+                result.add(copy.deepcopy(element))
     if hasattr(dataset, "file_meta"):
         result.file_meta = copy.deepcopy(dataset.file_meta)
     result.set_original_encoding(*dataset.original_encoding)
@@ -143,7 +146,7 @@ def _display(
     values: np.ndarray, valid: np.ndarray, ds: Dataset, meta: dict
 ) -> np.ndarray:
     working = _display_dataset(ds)
-    details = {
+    details: dict[str, Any] = {
         name: str(ds.get(name, ""))
         for name in (
             "RescaleSlope",

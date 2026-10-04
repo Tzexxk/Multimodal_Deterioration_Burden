@@ -53,7 +53,13 @@ class CommonCohortTests(unittest.TestCase):
     def run_freeze(self, version=None):
         with redirect_stdout(io.StringIO()):
             result = freeze_common_cohort(
-                self.root, *self.f.configs, self.f.processing, version
+                self.root,
+                self.f.configs[0],
+                self.f.configs[1],
+                self.f.configs[2],
+                self.f.configs[3],
+                self.f.processing,
+                version,
             )
         self.assertEqual(result, 0)
         _verify_run(self.f.f.outputs, 8)

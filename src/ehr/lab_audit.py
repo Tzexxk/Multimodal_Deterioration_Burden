@@ -7,6 +7,7 @@ import hashlib
 import html
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 import pyarrow as pa
@@ -14,8 +15,12 @@ import pyarrow.parquet as pq
 
 from src.cohort.common import _csv_reader, _progress, _validate_csv_rejects, _write_csv
 
-LAB_REQUIRED = "labevent_id subject_id hadm_id specimen_id itemid charttime storetime value valuenum valueuom".split()
-LAB_OPTIONAL = "ref_range_lower ref_range_upper flag priority comments".split()
+LAB_REQUIRED: Sequence[str] = (
+    "labevent_id subject_id hadm_id specimen_id itemid charttime storetime value valuenum valueuom".split()
+)
+LAB_OPTIONAL: Sequence[str] = (
+    "ref_range_lower ref_range_upper flag priority comments".split()
+)
 GROUPS = (
     ("blood_count", r"white blood|\bwbc\b|hemoglobin|haemoglobin|platelet"),
     ("electrolytes_metabolism", r"sodium|potassium|chloride|bicarbonate|glucose"),
@@ -57,7 +62,7 @@ def query_rows(connection, sql: str, parameters=None) -> list[dict]:
 
 
 def read_small_csv(
-    path: Path, required: list[str], run, *, exact: bool = False
+    path: Path, required: Sequence[str], run, *, exact: bool = False
 ) -> list[dict]:
     with path.open(encoding="utf-8-sig", newline="") as stream:
         reader = _csv_reader(stream, run.check_csv(path))
@@ -76,8 +81,8 @@ def scan_csv(
     connection,
     path: Path,
     name: str,
-    required: list[str],
-    optional: list[str],
+    required: Sequence[str],
+    optional: Sequence[str],
     condition: str,
     run,
 ) -> None:
@@ -89,7 +94,7 @@ def scan_csv(
         raise ValueError(f"Missing or duplicate required columns: {path}")
     projection = ", ".join(
         f'r."{k}"' if k in header else f"NULL::VARCHAR AS {k}"
-        for k in required + optional
+        for k in [*required, *optional]
     )
     if name == "labs_raw":
         projection += ", sha256(to_json(r)) AS raw_record_sha256"
@@ -120,7 +125,7 @@ def timestamp_sql(field: str) -> str:
 
 
 def prepare_labs(connection, settings: dict) -> None:
-    fields = LAB_REQUIRED + LAB_OPTIONAL
+    fields = [*LAB_REQUIRED, *LAB_OPTIONAL]
     projection = ",".join(
         f"substring(coalesce(comments,''),1,{settings['comment_max_chars']}) AS comments"
         if k == "comments"

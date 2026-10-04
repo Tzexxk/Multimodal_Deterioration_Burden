@@ -5,21 +5,23 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pyarrow as pa
 
 from src.ehr.lab_audit import json_hash, query_rows, read_small_csv
 
-REVIEW_COLUMNS = (
+REVIEW_COLUMNS: Sequence[str] = (
     "record_type review_key branch_id audit_fingerprint scope_inventory_sha256 "
     "feature_name itemid label fluid category source_unit canonical_unit "
     "conversion_multiplier conversion_offset valid_min valid_max valid_range_basis "
     "specimen_rule duplicate_rule numeric_result_rule missing_unit_rule keep "
     "exclusion_reason dictionary_version rationale reviewer reviewed_on review_version"
 ).split()
-STRING_FIELDS = (
+STRING_FIELDS: Sequence[str] = (
     "feature_name label fluid category source_unit canonical_unit valid_range_basis "
     "specimen_rule duplicate_rule numeric_result_rule missing_unit_rule exclusion_reason "
     "dictionary_version review_key branch_id audit_fingerprint rationale reviewer "
@@ -52,7 +54,7 @@ def write_templates(
 
     records = []
     for entry in inventory:
-        row = dict.fromkeys(REVIEW_COLUMNS, "")
+        row: dict[str, Any] = dict.fromkeys(REVIEW_COLUMNS, "")
         row.update(
             record_type="decision", branch_id="default", audit_fingerprint=fingerprint
         )
@@ -85,7 +87,7 @@ def write_templates(
             REVIEW_COLUMNS,
             [r for r in records if r["itemid"] in ids],
         )
-    acknowledgment = dict.fromkeys(REVIEW_COLUMNS, "")
+    acknowledgment: dict[str, Any] = dict.fromkeys(REVIEW_COLUMNS, "")
     acknowledgment.update(
         record_type="scope_ack",
         review_key="scope_" + scope_hash,
@@ -432,7 +434,7 @@ def expanded_decisions(
                 or entry["itemid"] in promoted_itemids
             ):
                 continue
-            row = dict.fromkeys(REVIEW_COLUMNS, "")
+            row: dict[str, Any] = dict.fromkeys(REVIEW_COLUMNS, "")
             row.update(
                 {
                     k: entry[k]

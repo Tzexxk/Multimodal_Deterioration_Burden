@@ -6,6 +6,7 @@ import json
 import math
 from collections import defaultdict
 from datetime import datetime
+from typing import Any
 
 from src.cohort.build_candidates import (
     active_intervals,
@@ -44,7 +45,7 @@ EVENT_COLUMNS += (
 ).split()
 
 
-def number(value: object) -> float | None:
+def number(value: Any) -> float | None:
     try:
         result = float(value)
         return result if math.isfinite(result) else None
@@ -556,7 +557,7 @@ def aggregate_medications(
             ]
             if any(value is None or value < 0 for value in doses):
                 row["reason"] = row["reason"] or "invalid_not_given_dose"
-            elif any(value > 0 for value in doses):
+            elif any(value is not None and value > 0 for value in doses):
                 row["reason"] = row["reason"] or "conflicting_not_given_dose"
         if not type_resolved or (
             actions == {"review"} and not review_type_nonadministration
@@ -582,8 +583,8 @@ def aggregate_medications(
                 row["reason"] = row["reason"] or "unresolved_medication_event"
         routes = {value["route"] for value in attached if value["route"]}
         if any(
-            not confirmed(rules["iv_routes"], value)
-            or confirmed(rules["iv_routes"], value)["action"] != "iv"
+            (route := confirmed(rules["iv_routes"], value)) is None
+            or route["action"] != "iv"
             for value in routes
         ):
             row["reason"] = row["reason"] or "route_conflict_or_unconfirmed"

@@ -336,7 +336,7 @@ class FormalLabelTests(unittest.TestCase):
             encoding="utf-8", newline=""
         ) as stream:
             reader = csv.DictReader(stream)
-            self.assertIn("burden_score", reader.fieldnames)
+            self.assertIn("burden_score", (reader.fieldnames or []))
             self.assertEqual(list(reader), [])
 
     def test_empty_early_report_and_alive_discharge_positive(self):
@@ -379,7 +379,7 @@ class FormalLabelTests(unittest.TestCase):
             encoding="utf-8", newline=""
         ) as stream:
             reader = csv.DictReader(stream)
-            self.assertIn("early_3h_score", reader.fieldnames)
+            self.assertIn("early_3h_score", (reader.fieldnames or []))
             self.assertEqual(list(reader), [])
 
     def test_unknown_classification_and_excluded_study(self):

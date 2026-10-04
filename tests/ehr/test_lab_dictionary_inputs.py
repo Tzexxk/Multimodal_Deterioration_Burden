@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import duckdb
 import pyarrow as pa
@@ -51,7 +52,7 @@ class DictionaryInputTests(unittest.TestCase):
                 review_key=review_key("99999", ""),
             )
         )
-        self.record = dict(
+        self.record: dict[str, Any] = dict(
             inventory=inventory,
             audit_fingerprint="synthetic",
             scope_inventory_sha256="synthetic_scope",

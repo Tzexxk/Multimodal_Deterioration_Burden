@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta
+from itertools import product
 from pathlib import Path
 from unittest.mock import patch
 
@@ -44,6 +45,7 @@ from src.cohort.burden_events import (
 from src.cohort.burden_io import (
     COMPONENTS,
     TABLE_COLUMNS,
+    ParquetSink,
     clinical_time,
     record_key,
     score,
@@ -3011,6 +3013,29 @@ class BurdenAuditTests(unittest.TestCase):
         self.assertIsNone(score([1, 0, None, 0, 0, 0])["burden_score"])
         with self.assertRaises(ValueError):
             score([0, 0, 0, 0, 0, 2])
+
+    def test_score_all_binary_combinations_and_pending_components(self) -> None:
+        for flags in product((0, 1), repeat=6):
+            result = score(list(flags))
+            respiratory = max(flags[2:4])
+            expected = max(flags[:2]) + 2 * respiratory + 2 * flags[4] + 3 * flags[5]
+            self.assertEqual(result["burden_score"], expected)
+            self.assertEqual(
+                result["phys_death"], int(bool(respiratory or flags[4] or flags[5]))
+            )
+            self.assertEqual(result["high_burden"], int(expected >= 3))
+        for index in range(6):
+            pending: list[int | None] = [0] * 6
+            pending[index] = None
+            self.assertIsNone(score(pending)["burden_score"])
+
+    def test_closed_parquet_sink_rejects_nonempty_writes(self) -> None:
+        path = self.root / "closed.parquet"
+        sink = ParquetSink(path, ["sample_id"])
+        sink.close()
+        with self.assertRaisesRegex(ValueError, "closed Parquet sink"):
+            sink.write([{"sample_id": "synthetic"}])
+        self.assertEqual(pq.read_table(path).num_rows, 0)
 
     def test_death_without_icu_missing_outtime_and_current_icu(self) -> None:
         self.tables["admissions"][1].update(

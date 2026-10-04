@@ -111,11 +111,11 @@ def prepare_intervals(
             and table == "transfers"
         ):
             later = [
-                clinical_time(other.get("intime"))
+                other_start
                 for other in result[index + 1 :]
-                if clinical_time(other.get("intime")) is not None
+                if (other_start := clinical_time(other.get("intime"))) is not None
                 and row["start"] is not None
-                and clinical_time(other["intime"]) > row["start"]
+                and other_start > row["start"]
                 and not ownership(
                     other,
                     admission,
@@ -143,14 +143,17 @@ def prepare_intervals(
             or row["end"] <= row["start"]
         ):
             row["reason"] = "invalid_care_interval"
-        if not row["reason"] and (row["end"] <= admitted or row["start"] > discharged):
-            row["reason"] = "interval_outside_admission"
-        row["admission_overlap_start"] = (
-            max(row["start"], admitted) if not row["reason"] else None
-        )
-        row["admission_overlap_end"] = (
-            min(row["end"], discharged) if not row["reason"] else None
-        )
+        row["admission_overlap_start"] = None
+        row["admission_overlap_end"] = None
+        if not row["reason"]:
+            start, end = row["start"], row["end"]
+            assert start is not None and end is not None
+            assert admitted is not None and discharged is not None
+            if end <= admitted or start > discharged:
+                row["reason"] = "interval_outside_admission"
+            else:
+                row["admission_overlap_start"] = max(start, admitted)
+                row["admission_overlap_end"] = min(end, discharged)
         row["starts_before_admission"] = int(
             row["start"] is not None
             and admitted is not None

@@ -12,6 +12,7 @@ import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
@@ -518,7 +519,7 @@ def reconstruct_static(cohort, evidence, patients, admissions, services, actual)
             len(p_index[patient]) <= 1 and len(a_index[admission]) <= 1,
             "Conflicting static rows",
         )
-        result = dict.fromkeys(CATEGORIES, "__MISSING__")
+        result: dict[str, Any] = dict.fromkeys(CATEGORIES, "__MISSING__")
         result.update(
             age_at_t0=base["age_at_t0"] if base["age_at_t0"] is not None else math.nan,
             hours_from_admission=math.nan,
@@ -1150,6 +1151,8 @@ def verify_provenance(root, args, settings, processed, outputs):
     )
     for evidence in (lab_audit, feature_audit):
         binding = evidence.get("binding", evidence.get("source_binding"))
+        if not isinstance(binding, dict):
+            raise ValueError("Missing audit source binding")
         require(
             binding["cohort"] == package_record["binding"]["cohort"]
             and binding["split"] == package_record["binding"]["split"],
@@ -1420,7 +1423,7 @@ def run_validation(root, args):
         "Reports must not be inside package storage",
     )
     initial_code = code_hash()
-    checks = {
+    checks: dict[str, dict[str, Any]] = {
         k: {"status": "blocked", "detail": "Prerequisite checks not completed"}
         for k in CHECKS
     }

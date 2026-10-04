@@ -28,10 +28,10 @@ def main() -> int:
     args = parser.parse_args()
     return prepare_images(
         ROOT,
-        *(
-            getattr(args, name).resolve()
-            for name in ("paths", "cohort", "ehr", "imaging")
-        ),
+        args.paths.resolve(),
+        args.cohort.resolve(),
+        args.ehr.resolve(),
+        args.imaging.resolve(),
         args.processing.resolve(),
         args.reviews.resolve() if args.reviews else None,
     )

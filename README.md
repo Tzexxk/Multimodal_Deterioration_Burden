@@ -1,12 +1,33 @@
 # ICU Risk
 
-Step 10A is available through `scripts/10_build_ehr_features.py --mode audit`.
-It audits laboratory records, validates explicit batched review decisions, and
-freezes a versioned laboratory dictionary. Follow the
-[Step 10A review guide](docs/codex/STEP_10A_LABORATORY_REVIEW.md) for evidence
-files, review fields, cumulative inputs, and freeze commands. Full-data runs
-are performed by the user; Codex uses synthetic tests and read-only checks.
-EHR aggregation and training-package export follow laboratory review.
+This pipeline builds a shared study-level cohort for comparing EHR,
+chest-radiograph and combined models of 72-hour deterioration burden. It prepares
+labels, reviewed images, EHR features and a portable training package.
+
+Steps 01-12, including the separate Step 10A laboratory review and Step 10B EHR
+feature build, are implemented. The rebuilt local release passed independent
+Step 12 validation on 2026-10-05. Full-data runs are performed by the user;
+Codex uses synthetic tests and read-only checks of actual outputs.
+
+| Verified release property | Value |
+| --- | --- |
+| Outcome horizon | 72 hours |
+| Common cohort | `burden_v2_h72_r01`: 473 studies, 303 admissions, 222 patients |
+| Patient split | `burden_v2_h72_r01_split_v1`: seed 42, 70/15/15 |
+| Train / validation / test studies | 337 / 69 / 67 |
+| Train / validation / test patients | 156 / 33 / 33 |
+| Laboratory dictionary | `lab_dictionary_v1`: 25 retained itemids, 26 retained unit branches |
+| EHR feature set | `ehr_features_v1`: 152 float32 numeric and five categorical features |
+| Portable package | `data/processed/training/burden_v2_h72_r01/` and matching `.zip` |
+
+The current acceptance record is
+`outputs/audit/burden_v2/training_package_acceptance.json`. Acceptance applies
+to its exact bound artifacts, sources, configuration and code. Model training
+and fitted preprocessing remain subsequent work. The commands below document
+stage execution; an already accepted release does not need to be replayed.
+See [terminal arguments](#terminal-arguments) for required flags and
+[Step 10A](#step-10a-laboratory-audit-review-and-dictionary-freeze) for the
+current laboratory-review commands.
 
 ## Configuration for the raw data audit
 
@@ -63,6 +84,69 @@ Run each command only after the preceding step succeeds. You do not need to
 delete existing outputs before rerunning. A successful run replaces that step's
 published artifacts; a failed run preserves or restores the previous output set.
 Timestamped run logs remain available. Do not delete recovery journals or backups.
+
+## Terminal arguments
+
+Commands in this README use PowerShell, run from the repository root after
+`conda activate ICU_Risk`. To check the active interpreter, run
+`python -c "import sys; print(sys.executable)"`. A backtick continues a command
+onto the next line; it must be the last character, without trailing spaces.
+Run each stage separately and check `$LASTEXITCODE` immediately afterward:
+
+```powershell
+if ($LASTEXITCODE -ne 0) { throw 'The preceding pipeline step failed; inspect its report.' }
+```
+
+The following optional flags select JSON inputs. Defaults are resolved from
+the repository root. An explicitly supplied relative path is resolved from
+the terminal's current directory. Selecting another file does not authorize
+changed clinical rules or replacement of a frozen version.
+
+| Optional argument | Supported steps | Default |
+| --- | --- | --- |
+| `--paths` | All steps | `configs/paths.local.json` |
+| `--imaging` | 01-03 and 05-12, including 10A/10B | `configs/imaging.json` |
+| `--cohort` | 04-12, including 10A/10B | `configs/cohort.json` |
+| `--ehr` | 01 and 05-12, including 10A/10B | `configs/ehr.json` |
+| `--processing` | 07-12, including 10A/10B | `configs/image_processing_v1.json` |
+| `--split-config` | 09-12, including 10A/10B | `configs/patient_split_v1.json` |
+| `--lab-config` | 10A, 10B, 11, 12 | `configs/lab_processing_v1.json` |
+| `--feature-config` | 10B, 11, 12 | `configs/ehr_features_v1.json` |
+| `--export-config` | 11, 12 | `configs/training_export_v1.json` |
+| `--validation-config` | 12 | `configs/training_validation_v1.json` |
+
+For example, select local paths for Step 01 with:
+
+```powershell
+python scripts/01_audit_data.py --paths configs/paths.local.json
+```
+
+Mode and review arguments have additional requirements:
+
+| Step / mode | Arguments and constraints |
+| --- | --- |
+| 07 | `--reviews` accepts one versioned image-review CSV. Omit it for an initial unreviewed run; completed required reviews are needed before Step 08. |
+| 08 | Optional `--release-version` selects a reviewed cohort revision. Without it, the version is derived from the frozen horizon, currently `burden_v2_h72_r01`. |
+| 10A audit | Required `--mode audit`; neither `--reviews` nor `--dictionary-version` is accepted. |
+| 10A review | Required `--mode review --reviews <CSV> [<CSV> ...]`; `--dictionary-version` is not accepted. |
+| 10A freeze | Required `--mode freeze --reviews <CSV> [<CSV> ...] --dictionary-version <VERSION>`. |
+| 10B audit | Required `--mode audit --dictionary-version <VERSION>`; `--feature-set-version` is not accepted. |
+| 10B build | Required `--mode build --dictionary-version <VERSION> --feature-set-version <VERSION>`. |
+| 11 / 12 | Release and feature identities come from the selected JSON inputs, rather than `--release-version`, `--dictionary-version` or `--feature-set-version` flags. |
+
+Use each script's `--help` for its exact interface, for example
+`python scripts/10_build_ehr_features.py --help`. Step 06 has no mode,
+review-file or horizon override. Patient ratios and seed are configured in
+`patient_split_v1.json`; they have no CLI overrides.
+
+Steps 05, 07, 10A and 10B have review checkpoints. A successful audit does not
+approve clinical mappings or publish a final feature table. An upstream rerun
+can change provenance and invalidate downstream frozen bindings even when
+clinical values remain unchanged. Changed raw sources, configuration or bound
+code require a new audit and an explicitly reviewed version or rebuild plan.
+Retain approved review inputs and completed release evidence. The temporary
+capture, cleanup and endpoint-rebinding tools used for this rebuild were removed
+after acceptance and are not maintained pipeline entrypoints.
 
 ## CSV final-record checks
 
@@ -124,6 +208,12 @@ reject incomplete or modified outputs. Step 01 can publish a complete set of
 diagnostic files with status `incomplete` and exit code `2`; inspect its report
 and correct the inputs before continuing. Regenerate old outputs without
 manifests, or outputs moved to another location, by rerunning the producing steps.
+
+Step 10B uses separate audit/build namespaces:
+`outputs/step_10b/audit/audit/step_10_manifest.json` and
+`outputs/step_10b/build/audit/step_10_manifest.json`, with the corresponding
+CSV-tail reports beside them. These do not replace the Step 10A manifest at
+`outputs/audit/step_10_manifest.json`.
 
 Wait for a step to finish before opening or using its outputs. Ordinary errors
 and Ctrl+C during publication roll back the whole output set. If the process is
@@ -202,10 +292,12 @@ no ICU SpO2 record. It does not prove that a clinical event never occurred.
 
 ### Review the local dictionaries
 
-`configs/cohort.json` contains `burden_v2` rules. All initial dictionary entries
-are unconfirmed. The first run produces an inventory and pending cases for
-review, so it can finish successfully without producing any assessable scores.
-Never interpret a successful exit as clinical approval.
+`configs/cohort.json` contains the reviewed `burden_v2` rules for the current
+release. Some clinical identities remain unknown under explicitly reviewed
+handling and exclusion policies. New dictionary values still require review.
+For an initial unreviewed configuration, an audit can finish successfully
+without producing assessable scores. Never interpret a successful exit as
+clinical approval or reset existing reviewed mappings to unconfirmed.
 
 Start with `outputs/audit/burden_v2/dictionary_inventory.csv` and the component
 frequency files. For each observed value, add or review its exact mapping in
@@ -663,6 +755,15 @@ configuration arguments as Step 05. The horizon comes exclusively from
 The current approved horizon is 72 hours. No Step 01-05 rerun or deletion is
 needed while the frozen inputs remain unchanged.
 
+Before a first publication or an approved rebuild, verify the Step 05 audit and
+record the reviewed endpoint in `outputs/audit/burden_v2/endpoint_decision.json`
+and `window_decision.md`. The decision must bind the current Step 05 manifest,
+metadata, selected-window artifacts and the approved selection record at
+`configs/reviews/window_selection_2026-10-04_v1.md`. Step 05 intentionally
+does not freeze H. There is no maintained endpoint-approval CLI; this is an
+evidence-reviewed publication checkpoint. Missing or stale bindings stop Step
+06. Do not copy old hashes or infer approval from successful audit execution.
+
 Step 06 verifies Steps 03-05 manifests, the frozen decision and supporting
 documents, configuration and review hashes, audit code, upstream images/matches,
 and raw CSV size/modification-time versions. It does not scan raw CSVs or decode
@@ -724,11 +825,15 @@ clinical dictionary review remain part of the user-run audit.
 
 ## Step 07: deterministic image preparation and QC
 
-After Step 06 succeeds, run:
+After Step 06 succeeds, use the approved image-review input for this release:
 
 ```powershell
-python scripts/07_qc_and_prepare_images.py
+python scripts/07_qc_and_prepare_images.py --reviews configs/reviews/image_qc_reviews_v5.csv
 ```
+
+For a first run on unreviewed images, omit `--reviews`, inspect the generated
+HTML and CSV, then rerun with completed decisions. The current v5 CSV can be
+reused only when its source DICOM, processing-configuration and NPY hashes match.
 
 No deletion or Step 01-06 rerun is needed while their sources remain unchanged.
 Step 07 processes only the selected images for formal labels: currently 475
@@ -1013,6 +1118,69 @@ patient assignments and group summaries pass review, the next stage can audit
 and freeze the laboratory dictionary and build features using the same cohort
 and patient assignments.
 
+## Step 10A: laboratory audit, review and dictionary freeze
+
+After Step 09, audit laboratory records for the frozen common cohort:
+
+```powershell
+python scripts/10_build_ehr_features.py --mode audit
+```
+
+Inspect `outputs/audit/burden_v2/labs/lab_audit_v1/lab_review.html`,
+`lab_audit_report.md`, `lab_dictionary_audit.csv`, the availability/time/ownership
+reports, specimen evidence, unit conflicts and duplicate reports. The audit
+scans cohort-patient records with DuckDB and a disk-backed subset, retaining
+raw values and units. The window is inclusive `[t0 - 24h, t0]`; availability
+and admission ownership are checked separately. An audit never approves a
+clinical mapping or conversion. Reference ranges remain descriptive evidence.
+
+Clinical reviews use completed versioned CSV inputs. Each item stays in one
+batch, with at most ten distinct itemids; every unit/specimen branch needs an
+explicit decision or applicable signed scope acknowledgment. Partial inputs
+remain partial and cannot authorize omitted branches. Specimen/duplicate rules,
+missing-unit handling and conversions require explicit reviewed decisions.
+
+For the accepted rebuilt release, use these two inputs together:
+
+```powershell
+python scripts/10_build_ehr_features.py --mode review --reviews `
+  configs/reviews/lab_dictionary_reviews_2026-10-05_v1_rebuild_v1.csv `
+  configs/reviews/lab_dictionary_scope_2026-10-05_v1_rebuild_v1.csv
+```
+
+The original `lab_dictionary_reviews_2026-10-05_v1.csv` and scope CSV retain
+their original approval and old audit fingerprint. The rebuilt inputs preserve
+their clinical decisions, reviewer, date and rationale while binding the verified
+new audit. Do not combine inputs from different audit fingerprints. On a new
+audit or dataset, review changed evidence before creating new versioned inputs;
+changing a fingerprint alone does not establish clinical approval.
+
+Inspect `review_state.json`, `review_progress.csv` and
+`lab_conversion_checks.csv` in the laboratory audit directory. Freeze only when
+`review_complete=true`, `scope_acknowledgment_complete=true`, no branches remain
+pending and retained-rule conflicts are resolved:
+
+```powershell
+python scripts/10_build_ehr_features.py --mode freeze `
+  --reviews configs/reviews/lab_dictionary_reviews_2026-10-05_v1_rebuild_v1.csv `
+  configs/reviews/lab_dictionary_scope_2026-10-05_v1_rebuild_v1.csv `
+  --dictionary-version lab_dictionary_v1
+```
+
+The current dictionary has 370 reviewed unit branches, retaining 26 branches
+from 25 itemids and excluding 344 branches from 343 other itemids. It publishes
+`data/processed/ehr/burden_v2/lab_dictionary.parquet`, its immutable snapshot
+under `releases/lab_dictionary_v1/`, and
+`outputs/audit/burden_v2/lab_dictionary_freeze.json`. Identical bindings reuse
+the snapshot; changed content cannot overwrite a frozen dictionary identity.
+`dictionary_frozen=true` is separate from feature readiness. The Step 10A
+record retains `ehr_features_ready=false`; Step 10B's own freeze record establishes
+feature readiness after build. See the
+[Step 10A review guide](docs/codex/STEP_10A_LABORATORY_REVIEW.md) for detailed
+fields and selector rules; the commands above specify the current review inputs.
+Detailed guides under `docs/` are local files excluded from Git by the current
+ignore rules; the runnable commands and required arguments are included here.
+
 ## Step 10B: EHR feature audit and publication
 
 The independent Step 10B entry uses the frozen `lab_dictionary_v1` without
@@ -1040,6 +1208,15 @@ See [Step 10B execution](configs/reviews/step_10b_execution_v1.md) for output
 locations, source limitations, audit gates and immutable-version behavior.
 Feature publication does not complete Steps 11-12.
 
+Audit publishes reports under `outputs/audit/burden_v2/ehr/ehr_audit_v1/`.
+Require `audit_checks_passed=true` and `blocking_conflicts=0` in
+`ehr_audit_manifest.json` before build. Build publishes
+`data/processed/ehr/burden_v2/ehr_features_raw.parquet`, `feature_schema.json`,
+their immutable `releases/ehr_features_v1/` snapshot, and the audit directory's
+`ehr_features_freeze.json`. Require `ehr_features_ready=true`. The table retains
+all 473 sample keys, numeric NaN and categorical `__MISSING__`; preprocessing
+is fitted on training data later at the model stage.
+
 ## Step 11: portable directory and ZIP
 
 Export the approved frozen cohort, split and EHR feature set with:
@@ -1063,6 +1240,7 @@ pending after export. See [Step 11 execution](configs/reviews/step_11_execution_
 
 ```powershell
 python scripts/12_validate_training_package.py
+if ($LASTEXITCODE -ne 0) { throw 'Step 12 did not accept the training package; inspect its reports.' }
 ```
 
 The independent validator checks frozen provenance, V1 sample/feature contracts,
@@ -1077,3 +1255,28 @@ continues to describe Step 11; the matching external Step 12 record determines
 acceptance. The user runs complete validation; Codex runs synthetic tests and
 verifies actual outputs read-only. See [Step 12 execution](configs/reviews/step_12_execution_v1.md)
 for report locations, statuses and recovery behavior.
+
+Confirm `independent_validation_completed=true`, `validation_passed=true` and
+`training_package_accepted=true` in the external acceptance record, with all
+mandatory check statuses `pass`. `train_only_model_preprocessing=not_applicable`
+is expected before modeling. Preserve the package, ZIP, completed manifests,
+review inputs and binding records. Temporary rebuild tools and the old review
+comparison copy were removed only after acceptance; current audit subsets and
+frozen evidence remain available for independent verification.
+
+## Development verification
+
+Run synthetic regressions separately so each suite can resolve its local
+fixture imports. These commands do not run full-data pipelines:
+
+```powershell
+python -B -m unittest discover -s tests/cohort -p "test_*.py" -q
+python -B -m unittest discover -s tests/ehr -p "test_*.py" -q
+python -B -m unittest discover -s tests/data -p "test_*.py" -q
+ruff check --no-cache src scripts tests
+git diff --check
+```
+
+Image-processing regressions are included under `tests/cohort/test_image_qc.py`.
+CLI `--help` checks can be run without reading actual data. Documentation-only
+changes do not require rerunning accepted full-data stages.

@@ -14,6 +14,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import numpy as np
@@ -75,7 +76,7 @@ class TrainingExportTests(unittest.TestCase):
         for index, patient in enumerate([10000001, 10000001, 10000002, 10000003]):
             study, admission = 50000001 + index, 20000000 + patient
             key = f"p{patient}_h{admission}_s{study}"
-            row = {k: 0 for k in COMPONENTS}
+            row: dict[str, Any] = {k: 0 for k in COMPONENTS}
             row.update(
                 sample_id=key,
                 subject_id=patient,
@@ -441,6 +442,7 @@ class TrainingExportTests(unittest.TestCase):
         script = """
 import os,pickle,sys
 from pathlib import Path
+from typing import Any
 from src.data import export_training_package as step
 root,args,context=pickle.loads(Path(sys.argv[1]).read_bytes())
 step.verify_inputs=lambda *args: context

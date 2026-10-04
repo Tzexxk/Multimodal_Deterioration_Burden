@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -94,15 +95,16 @@ def score(flags: list[int | None]) -> dict:
             phys_death=None,
             high_burden=None,
         )
-    transfer, respiratory = max(flags[:2]), max(flags[2:4])
-    burden = transfer + 2 * respiratory + 2 * flags[4] + 3 * flags[5]
+    known = [flag for flag in flags if flag is not None]
+    transfer, respiratory = max(known[:2]), max(known[2:4])
+    burden = transfer + 2 * respiratory + 2 * known[4] + 3 * known[5]
     return dict(
         T=transfer,
         R=respiratory,
-        C=flags[4],
-        D=flags[5],
+        C=known[4],
+        D=known[5],
         burden_score=float(burden),
-        phys_death=int(bool(respiratory or flags[4] or flags[5])),
+        phys_death=int(bool(respiratory or known[4] or known[5])),
         high_burden=int(burden >= 3),
     )
 
@@ -260,7 +262,7 @@ TIME_FIELDS = {
 }
 
 
-def schema_for(columns: list[str]) -> pa.Schema:
+def schema_for(columns: Sequence[str]) -> pa.Schema:
     fields = []
     for column in columns:
         if column in TIME_FIELDS or column.endswith("_first_event_time"):
@@ -311,13 +313,15 @@ def schema_for(columns: list[str]) -> pa.Schema:
 class ParquetSink:
     """Append admission-sized batches, including an explicitly typed empty table."""
 
-    def __init__(self, path: Path, columns: list[str]) -> None:
+    def __init__(self, path: Path, columns: Sequence[str]) -> None:
         self.schema = schema_for(columns)
         self.writer = pq.ParquetWriter(path, self.schema, compression="zstd")
         self.count = 0
 
     def write(self, values: list[dict]) -> None:
         if values:
+            if self.writer is None:
+                raise ValueError("Cannot write to a closed Parquet sink")
             self.writer.write_table(pa.Table.from_pylist(values, schema=self.schema))
             self.count += len(values)
 

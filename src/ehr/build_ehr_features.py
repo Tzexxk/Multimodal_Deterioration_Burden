@@ -506,6 +506,7 @@ def run_step10(
                 )
             record = None
         state = {"review_complete": False, "scope_acknowledgment_complete": False}
+        decisions, acknowledgment = [], None
         frozen = None
         run.manifest.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
@@ -526,13 +527,12 @@ def run_step10(
                     write_json(run.path(audit_path), record)
                 else:
                     shutil.copyfile(audit_path, run.path(audit_path))
-                    if mode != "audit":
-                        dictionary = audit.load_cache(
-                            connection,
-                            {k: Path(v) for k, v in record["cache_paths"].items()},
-                        )
-                        audit.build_views(connection, context["cohort"])
                 if mode != "audit":
+                    dictionary = audit.load_cache(
+                        connection,
+                        {k: Path(v) for k, v in record["cache_paths"].items()},
+                    )
+                    audit.build_views(connection, context["cohort"])
                     review_hashes = {str(path): _file_hash(path) for path in reviews}
                     decisions, acknowledgment = review.parse_reviews(
                         reviews, record["inventory"], dictionary, record, settings, run
@@ -580,6 +580,10 @@ def run_step10(
                     ):
                         raise ValueError("Review input changed during execution")
                     if mode == "freeze":
+                        if dictionary_version is None:
+                            raise ValueError(
+                                "Dictionary version is required for freezing"
+                            )
                         if not state["review_complete"]:
                             raise ValueError(
                                 "Dictionary freeze blocked by incomplete clinical review or scope acknowledgment"

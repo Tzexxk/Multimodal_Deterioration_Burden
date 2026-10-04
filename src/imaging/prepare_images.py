@@ -16,6 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pydicom
 from PIL import Image
+from pydicom import config as dicom_config
 
 from src.cohort import build_labels
 from src.cohort.burden_io import clinical_time
@@ -668,7 +669,7 @@ def prepare_images(
             },
             "decoder_handlers": {
                 m.HANDLER_NAME: m.is_available()
-                for m in pydicom.config.pixel_data_handlers
+                for m in dicom_config.pixel_data_handlers
             },
         }
         run.path(qc_dir / "run_metadata.json").write_text(

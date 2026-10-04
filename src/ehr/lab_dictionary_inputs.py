@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 from src.ehr.lab_review import REVIEW_COLUMNS
 
@@ -74,7 +75,7 @@ def build_approved_reviews(record: dict, selection: list[dict]) -> tuple[list, l
     }
     for entry in sorted(inventory, key=lambda r: (int(r["itemid"]), r["source_unit"])):
         itemid, unit = entry["itemid"], entry["source_unit"]
-        row = dict.fromkeys(REVIEW_COLUMNS, "")
+        row: dict[str, Any] = dict.fromkeys(REVIEW_COLUMNS, "")
         row.update(provenance)
         row.update(
             {
@@ -141,7 +142,7 @@ def build_approved_reviews(record: dict, selection: list[dict]) -> tuple[list, l
                 rationale=by_id[itemid]["rationale"],
             )
         rows.append(row)
-    ack = dict.fromkeys(REVIEW_COLUMNS, "")
+    ack: dict[str, Any] = dict.fromkeys(REVIEW_COLUMNS, "")
     ack.update(provenance)
     ack.update(
         record_type="scope_ack",

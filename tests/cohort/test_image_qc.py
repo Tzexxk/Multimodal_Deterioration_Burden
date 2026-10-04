@@ -336,7 +336,7 @@ class ImagePublicationTests(unittest.TestCase):
             relative = f"dataset/p{row['subject_id']}/s{row['study_id']}/{row['selected_dicom_id']}.dcm"
             row["dicom_path"] = relative
             match = next(m for m in self.f.matches if m["study_id"] == row["study_id"])
-            time = datetime.fromisoformat(match["t0"])
+            time = datetime.fromisoformat(str(match["t0"]))
             seed = 100 if duplicate and i < 2 else row["study_id"]
             values = np.random.default_rng(seed).integers(
                 0, 2000, (20, 31), dtype=np.uint16
@@ -394,7 +394,16 @@ class ImagePublicationTests(unittest.TestCase):
     def run_images(self, reviews=None):
         with redirect_stdout(io.StringIO()):
             self.assertEqual(
-                prepare_images(self.root, *self.configs, self.processing, reviews), 0
+                prepare_images(
+                    self.root,
+                    self.configs[0],
+                    self.configs[1],
+                    self.configs[2],
+                    self.configs[3],
+                    self.processing,
+                    reviews,
+                ),
+                0,
             )
         _verify_run(self.f.outputs, 7)
         return pq.read_table(self.image_dir / "image_qc_status.parquet").to_pylist()

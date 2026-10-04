@@ -280,7 +280,10 @@ class PatientSplitPublicationTests(unittest.TestCase):
             self.assertEqual(
                 create_patient_split(
                     self.root,
-                    *self.images.configs,
+                    self.images.configs[0],
+                    self.images.configs[1],
+                    self.images.configs[2],
+                    self.images.configs[3],
                     self.images.processing,
                     self.split_file,
                 ),
@@ -296,7 +299,13 @@ class PatientSplitPublicationTests(unittest.TestCase):
         overlapping.write_bytes(original_config)
         with self.assertRaisesRegex(ValueError, "outside generated output roots"):
             create_patient_split(
-                self.root, *self.images.configs, self.images.processing, overlapping
+                self.root,
+                self.images.configs[0],
+                self.images.configs[1],
+                self.images.configs[2],
+                self.images.configs[3],
+                self.images.processing,
+                overlapping,
             )
         self.assertEqual(overlapping.read_bytes(), original_config)
         overlapping.unlink()
