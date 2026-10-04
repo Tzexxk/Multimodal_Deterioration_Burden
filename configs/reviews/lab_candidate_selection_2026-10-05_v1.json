@@ -1,0 +1,137 @@
+{
+  "selection_version": "lab_candidate_selection_2026-10-05_v1",
+  "policy": {
+    "selection_version": "lab_candidate_selection_2026-10-05_v1",
+    "reviewer": "ZE Xiaokang",
+    "reviewed_on": "2026-10-05",
+    "authorization": "User approved the training missingness policy and individually selected the items below in this conversation. Candidate selection does not approve clinical dictionary rules.",
+    "individual_decisions": {
+      "50893": {
+        "include": true,
+        "rationale": "User selected total calcium in the 30%-50% missingness band."
+      },
+      "50960": {
+        "include": true,
+        "rationale": "User selected magnesium in the 30%-50% missingness band."
+      },
+      "50970": {
+        "include": true,
+        "rationale": "User selected phosphate in the 30%-50% missingness band."
+      },
+      "50885": {
+        "include": true,
+        "rationale": "User selected total bilirubin to extend liver-related candidate information."
+      },
+      "51237": {
+        "include": true,
+        "rationale": "User selected INR to extend coagulation-related candidate information; missing source unit remains unresolved."
+      },
+      "50861": {
+        "include": true,
+        "rationale": "User selected ALT as a sparse expanded candidate; stability assessment remains pending."
+      },
+      "50878": {
+        "include": true,
+        "rationale": "User selected AST as a sparse expanded candidate; training-only assessment of overlap with ALT remains pending."
+      },
+      "51275": {
+        "include": true,
+        "rationale": "User selected PTT to extend coagulation-related candidate information; treatment effects require care in interpretation."
+      },
+      "51274": {
+        "include": false,
+        "rationale": "User deferred PT after selecting INR and PTT, to limit potentially overlapping measurements."
+      },
+      "50863": {
+        "include": false,
+        "rationale": "User deferred alkaline phosphatase after selecting total bilirubin, ALT and AST; coverage is sparse and incremental relevance remains uncertain."
+      }
+    }
+  },
+  "policy_sha256": "3c99f5721f6c8340e5c352701d7a48ca8d3001cf005018af33ce35901a7205e1",
+  "audit_fingerprint": "700ce38be57b4d4e1bf616744cd2d60d25e3eefc8f35ef756abf2d5fa9b3eb74",
+  "audit_manifest_sha256": "b2c3247d7b8da3cc4cbede365a820da99b6bb477fe632c9fb083756f772c985e",
+  "source_binding": {
+    "cohort": {
+      "cohort_version": "burden_v2_h72_r01",
+      "horizon_hours": 72,
+      "cohort_freeze_sha256": "9676b4975701d920df1b0922c516ff4e6c8045488cfe6158bad4d466a846a8d4",
+      "cohort_sha256": "8f2197de107beb85df99a020bdfdfb9692b36e371492629c2b518397ce1cac21",
+      "cohort_audit_sha256": "676e47f91366124d14a0330d0352879c290d78e5f39cde3b3ea2f87d18f48a0b",
+      "original_cohort_freeze_run_id": "4d1d45d50bd34f1aa070c4a938257a8a",
+      "cohort_source_fingerprint": "23a7b95910402f8b950358e0fa6423aa18048e3bd1f4eafaf597724a12f950ab"
+    },
+    "split": {
+      "split_version": "burden_v2_h72_r01_split_v1",
+      "original_split_run_id": "0122d53a2fe54c4dae208f57fa758e16",
+      "split_freeze_sha256": "44cb3fe6cbaf2dd1b8134016bdf9ad43a1eae0daabccee2371e303dd56709c40",
+      "patient_split_sha256": "132e0fa4e8e6b06a46898bd7a2dfe5a923aa5e2c998b926e7ede17727faa7b7b",
+      "source_fingerprint": "99f79193be95ebba0e062cb37d14121a430ae46202522cd0f03f46c22a031423"
+    },
+    "source_versions": {
+      "d_labitems": {
+        "exists": true,
+        "size_bytes": 64663,
+        "modified_utc": "2026-10-03T16:32:37.183079+00:00"
+      },
+      "labevents": {
+        "exists": true,
+        "size_bytes": 18402851720,
+        "modified_utc": "2026-10-03T16:34:18.972524+00:00"
+      },
+      "admissions": {
+        "exists": true,
+        "size_bytes": 94156458,
+        "modified_utc": "2026-10-03T16:32:36.340221+00:00"
+      }
+    },
+    "source_paths": {
+      "d_labitems": "G:\\BN5212_Dataset\\MIMIC-IV\\hosp\\d_labitems.csv",
+      "labevents": "G:\\BN5212_Dataset\\MIMIC-IV\\hosp\\labevents.csv",
+      "admissions": "G:\\BN5212_Dataset\\MIMIC-IV\\hosp\\admissions.csv"
+    },
+    "dictionary_source_sha256": "f3182dbace857d8cd3439ebbd2095d3128c1751cb42b12e3e4208bdc4b363567",
+    "configuration_sha256": "73740b0b5f91f057f5b4354388387eb4c084eefec3d26466f6e10dc427284dd8",
+    "settings": {
+      "audit_version": "lab_audit_v1",
+      "algorithm_version": "lab_audit_review_v1",
+      "cohort_version": "burden_v2_h72_r01",
+      "split_version": "burden_v2_h72_r01_split_v1",
+      "lookback_hours": 24,
+      "memory_limit": "2GB",
+      "batch_item_limit": 10,
+      "example_limit": 5,
+      "comment_max_chars": 512,
+      "reviewer": "ZE Xiaokang",
+      "tables": {
+        "d_labitems": "hosp/d_labitems.csv",
+        "labevents": "hosp/labevents.csv",
+        "admissions": "hosp/admissions.csv"
+      }
+    },
+    "code_sha256": "fa3c58cee5606f17a691d2fb68c40c5001bafbe38c1cbf922bda41eb104245b9",
+    "runtime_versions": {
+      "python": "3.11.16",
+      "duckdb": "1.5.5",
+      "pyarrow": "24.0.0"
+    },
+    "cache_filter": "all laboratory records and all admissions of frozen-cohort patients; inventory by inclusive charttime study windows"
+  },
+  "selection_code_sha256": "c0a6b350d52f32c4c5cdbdb909f378c70f79541f2380b04cf458bea655f66356",
+  "patient_split_sha256": "132e0fa4e8e6b06a46898bd7a2dfe5a923aa5e2c998b926e7ede17727faa7b7b",
+  "training_sample_keys_sha256": "f2647d68e090ca7f27a2abc9ade5a6847a4b98477d52e6a77e7e34e12dbe6ce6",
+  "training_studies": 337,
+  "training_patients": 156,
+  "inventory_itemids": 368,
+  "selected_itemids": 25,
+  "thresholds_percent": [
+    30,
+    50,
+    80
+  ],
+  "coverage_stage": "eligible_finite_valuenum_before_clinical_cleaning",
+  "selection_csv_sha256": "fe65170b8ee3d3bdff161163de1541ee5cd895bcfd2cb18723c3b41464adf8dd",
+  "clinical_rules_approved": false,
+  "dictionary_frozen": false,
+  "ehr_features_ready": false
+}

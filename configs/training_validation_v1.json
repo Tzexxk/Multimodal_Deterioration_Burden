@@ -1,0 +1,14 @@
+{
+  "validation_version": "training_validation_v1",
+  "interface_version": "1.0",
+  "release_id": "burden_v2_h72_r01",
+  "cohort_version": "burden_v2_h72_r01",
+  "split_version": "burden_v2_h72_r01_split_v1",
+  "dictionary_version": "lab_dictionary_v1",
+  "feature_set_version": "ehr_features_v1",
+  "expected_counts": {"studies": 473, "admissions": 303, "patients": 222},
+  "expected_split_studies": {"train": 337, "validation": 69, "test": 67},
+  "expected_split_patients": {"train": 156, "validation": 33, "test": 33},
+  "relocation_policy": "temporary_directory",
+  "failure_detail_limit": 50
+}

@@ -1,0 +1,18 @@
+{
+  "selection_version": "lab_candidate_selection_2026-10-05_v1",
+  "reviewer": "ZE Xiaokang",
+  "reviewed_on": "2026-10-05",
+  "authorization": "User approved the training missingness policy and individually selected the items below in this conversation. Candidate selection does not approve clinical dictionary rules.",
+  "individual_decisions": {
+    "50893": {"include": true, "rationale": "User selected total calcium in the 30%-50% missingness band."},
+    "50960": {"include": true, "rationale": "User selected magnesium in the 30%-50% missingness band."},
+    "50970": {"include": true, "rationale": "User selected phosphate in the 30%-50% missingness band."},
+    "50885": {"include": true, "rationale": "User selected total bilirubin to extend liver-related candidate information."},
+    "51237": {"include": true, "rationale": "User selected INR to extend coagulation-related candidate information; missing source unit remains unresolved."},
+    "50861": {"include": true, "rationale": "User selected ALT as a sparse expanded candidate; stability assessment remains pending."},
+    "50878": {"include": true, "rationale": "User selected AST as a sparse expanded candidate; training-only assessment of overlap with ALT remains pending."},
+    "51275": {"include": true, "rationale": "User selected PTT to extend coagulation-related candidate information; treatment effects require care in interpretation."},
+    "51274": {"include": false, "rationale": "User deferred PT after selecting INR and PTT, to limit potentially overlapping measurements."},
+    "50863": {"include": false, "rationale": "User deferred alkaline phosphatase after selecting total bilirubin, ALT and AST; coverage is sparse and incremental relevance remains uncertain."}
+  }
+}

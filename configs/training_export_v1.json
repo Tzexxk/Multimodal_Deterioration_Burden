@@ -1,0 +1,8 @@
+{
+  "interface_version": "1.0",
+  "release_id": "burden_v2_h72_r01",
+  "cohort_version": "burden_v2_h72_r01",
+  "split_version": "burden_v2_h72_r01_split_v1",
+  "dictionary_version": "lab_dictionary_v1",
+  "feature_set_version": "ehr_features_v1"
+}

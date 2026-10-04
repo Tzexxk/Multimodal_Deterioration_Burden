@@ -1,0 +1,416 @@
+{
+  "review_version": "lab_dictionary_reviews_2026-10-05_v1",
+  "reviewer": "ZE Xiaokang",
+  "approved_on": "2026-10-05",
+  "authorization": "Explicit user confirmations of MCHC, INR, common rules and full version-specific scope in this conversation.",
+  "audit_fingerprint": "700ce38be57b4d4e1bf616744cd2d60d25e3eefc8f35ef756abf2d5fa9b3eb74",
+  "audit_manifest_sha256": "b2c3247d7b8da3cc4cbede365a820da99b6bb477fe632c9fb083756f772c985e",
+  "scope_inventory_sha256": "5c52abb8bf118b7803ebb5bee7e3c2f5db3575454dba7fc8a2e69f0876ccc4ef",
+  "selection_sha256": "fe65170b8ee3d3bdff161163de1541ee5cd895bcfd2cb18723c3b41464adf8dd",
+  "input_builder_sha256": "eec6b590f49133c702b13090919def186df1565150766b90861de9db1ec02cc6",
+  "review_files_sha256": {
+    "lab_dictionary_reviews_2026-10-05_v1.csv": "00536cf63d453ed70945d47bfb6d53676a93429b20c340b725b4a93e7d03199a",
+    "lab_dictionary_scope_2026-10-05_v1.csv": "ae4d645bf445f234076429cd6de5ef3dfcbee93afc2d7f15da0273f239a32280"
+  },
+  "readonly_validation": {
+    "candidate_unit_branches": 370,
+    "completed_unit_branches": 370,
+    "pending_unit_branches": 0,
+    "scope_acknowledgment_complete": true,
+    "review_complete": true
+  },
+  "retained_itemids": 25,
+  "retained_unit_branches": 26,
+  "excluded_itemids": 343,
+  "source_binding": {
+    "cohort": {
+      "cohort_version": "burden_v2_h72_r01",
+      "horizon_hours": 72,
+      "cohort_freeze_sha256": "9676b4975701d920df1b0922c516ff4e6c8045488cfe6158bad4d466a846a8d4",
+      "cohort_sha256": "8f2197de107beb85df99a020bdfdfb9692b36e371492629c2b518397ce1cac21",
+      "cohort_audit_sha256": "676e47f91366124d14a0330d0352879c290d78e5f39cde3b3ea2f87d18f48a0b",
+      "original_cohort_freeze_run_id": "4d1d45d50bd34f1aa070c4a938257a8a",
+      "cohort_source_fingerprint": "23a7b95910402f8b950358e0fa6423aa18048e3bd1f4eafaf597724a12f950ab"
+    },
+    "split": {
+      "split_version": "burden_v2_h72_r01_split_v1",
+      "original_split_run_id": "0122d53a2fe54c4dae208f57fa758e16",
+      "split_freeze_sha256": "44cb3fe6cbaf2dd1b8134016bdf9ad43a1eae0daabccee2371e303dd56709c40",
+      "patient_split_sha256": "132e0fa4e8e6b06a46898bd7a2dfe5a923aa5e2c998b926e7ede17727faa7b7b",
+      "source_fingerprint": "99f79193be95ebba0e062cb37d14121a430ae46202522cd0f03f46c22a031423"
+    },
+    "source_versions": {
+      "d_labitems": {
+        "exists": true,
+        "size_bytes": 64663,
+        "modified_utc": "2026-10-03T16:32:37.183079+00:00"
+      },
+      "labevents": {
+        "exists": true,
+        "size_bytes": 18402851720,
+        "modified_utc": "2026-10-03T16:34:18.972524+00:00"
+      },
+      "admissions": {
+        "exists": true,
+        "size_bytes": 94156458,
+        "modified_utc": "2026-10-03T16:32:36.340221+00:00"
+      }
+    },
+    "source_paths": {
+      "d_labitems": "G:\\BN5212_Dataset\\MIMIC-IV\\hosp\\d_labitems.csv",
+      "labevents": "G:\\BN5212_Dataset\\MIMIC-IV\\hosp\\labevents.csv",
+      "admissions": "G:\\BN5212_Dataset\\MIMIC-IV\\hosp\\admissions.csv"
+    },
+    "dictionary_source_sha256": "f3182dbace857d8cd3439ebbd2095d3128c1751cb42b12e3e4208bdc4b363567",
+    "configuration_sha256": "73740b0b5f91f057f5b4354388387eb4c084eefec3d26466f6e10dc427284dd8",
+    "settings": {
+      "audit_version": "lab_audit_v1",
+      "algorithm_version": "lab_audit_review_v1",
+      "cohort_version": "burden_v2_h72_r01",
+      "split_version": "burden_v2_h72_r01_split_v1",
+      "lookback_hours": 24,
+      "memory_limit": "2GB",
+      "batch_item_limit": 10,
+      "example_limit": 5,
+      "comment_max_chars": 512,
+      "reviewer": "ZE Xiaokang",
+      "tables": {
+        "d_labitems": "hosp/d_labitems.csv",
+        "labevents": "hosp/labevents.csv",
+        "admissions": "hosp/admissions.csv"
+      }
+    },
+    "code_sha256": "fa3c58cee5606f17a691d2fb68c40c5001bafbe38c1cbf922bda41eb104245b9",
+    "runtime_versions": {
+      "python": "3.11.16",
+      "duckdb": "1.5.5",
+      "pyarrow": "24.0.0"
+    },
+    "cache_filter": "all laboratory records and all admissions of frozen-cohort patients; inventory by inclusive charttime study windows"
+  },
+  "conversion_checks": [
+    {
+      "review_key": "lab_6d70e5896e7338ed2f5d49fd323ef6bcfc1dbc206ff2ee268dea012b69d0776b",
+      "branch_id": "default",
+      "feature_name": "alt",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 103,
+      "nonfinite_conversions": 0,
+      "converted_min": 5.0,
+      "converted_max": 600.0
+    },
+    {
+      "review_key": "lab_b8d2b3363311f92fcc5dc102011e6c8dca459075d3fd2b37250eea4d676f38dc",
+      "branch_id": "default",
+      "feature_name": "anion_gap",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 366,
+      "nonfinite_conversions": 0,
+      "converted_min": 7.0,
+      "converted_max": 25.0
+    },
+    {
+      "review_key": "lab_9c6014aea7a03b4e8ea072972358d893701a6c6de604f71a9dabd5796992a998",
+      "branch_id": "default",
+      "feature_name": "ast",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 103,
+      "nonfinite_conversions": 0,
+      "converted_min": 10.0,
+      "converted_max": 536.0
+    },
+    {
+      "review_key": "lab_a5f1e2f0da51a61172400073ac43b689398c47c2a6212837e32387bca306d6b7",
+      "branch_id": "default",
+      "feature_name": "bicarbonate",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 368,
+      "nonfinite_conversions": 0,
+      "converted_min": 12.0,
+      "converted_max": 46.0
+    },
+    {
+      "review_key": "lab_d9fb0b1c2de8855349e3a0063792bcdb36ea9c044a502cd2e81e8690c9958110",
+      "branch_id": "default",
+      "feature_name": "total_bilirubin",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 104,
+      "nonfinite_conversions": 0,
+      "converted_min": 0.1,
+      "converted_max": 3.6
+    },
+    {
+      "review_key": "lab_dcbfcbefd624ebc79279ac87586cae849b899eb7e58728dfc6e943bfa8bb8d81",
+      "branch_id": "default",
+      "feature_name": "total_calcium",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 318,
+      "nonfinite_conversions": 0,
+      "converted_min": 6.4,
+      "converted_max": 13.0
+    },
+    {
+      "review_key": "lab_900f573956f39214b1c474df4f28d8b9ebc09ba8d7b6e72d25a4d4b0746f2320",
+      "branch_id": "default",
+      "feature_name": "chloride",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 383,
+      "nonfinite_conversions": 0,
+      "converted_min": 81.0,
+      "converted_max": 120.0
+    },
+    {
+      "review_key": "lab_f083f194bb27407e961ae3220c9c7fa07f02053455539093a6e5d4598c0dbf5b",
+      "branch_id": "default",
+      "feature_name": "creatinine",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 373,
+      "nonfinite_conversions": 0,
+      "converted_min": 0.3,
+      "converted_max": 12.5
+    },
+    {
+      "review_key": "lab_82f61605aff2e2b53e6ed2a47cfa4305a6dd59fb34dd28ad89f8e6d3ad28a9b8",
+      "branch_id": "default",
+      "feature_name": "glucose",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 363,
+      "nonfinite_conversions": 0,
+      "converted_min": 38.0,
+      "converted_max": 531.0
+    },
+    {
+      "review_key": "lab_3eceb4c718c5443e519ee19ea98757f23d950e375ccec460e2ece57a5d7572b7",
+      "branch_id": "default",
+      "feature_name": "magnesium",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 347,
+      "nonfinite_conversions": 0,
+      "converted_min": 1.0,
+      "converted_max": 3.2
+    },
+    {
+      "review_key": "lab_31c6b0ae6a4fed82d233073d535666476c62fbeaaab12841791e796a6c8abf11",
+      "branch_id": "default",
+      "feature_name": "phosphate",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 319,
+      "nonfinite_conversions": 0,
+      "converted_min": 0.8,
+      "converted_max": 7.8
+    },
+    {
+      "review_key": "lab_3b950589b4552ac104863d74cc60215ea01eb5e48e92ec3af2d3a533c9a241c7",
+      "branch_id": "default",
+      "feature_name": "potassium",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 382,
+      "nonfinite_conversions": 0,
+      "converted_min": 2.6,
+      "converted_max": 6.3
+    },
+    {
+      "review_key": "lab_e9fd37a965263203609e601dd0762564c38bdc5507f0246925f44a35e5933483",
+      "branch_id": "default",
+      "feature_name": "sodium",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 382,
+      "nonfinite_conversions": 0,
+      "converted_min": 116.0,
+      "converted_max": 150.0
+    },
+    {
+      "review_key": "lab_73673c2893006cef17b5cc173139812a83c1a3b84dd16266d162b0f6650f6cea",
+      "branch_id": "default",
+      "feature_name": "bun",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 370,
+      "nonfinite_conversions": 0,
+      "converted_min": 2.0,
+      "converted_max": 108.0
+    },
+    {
+      "review_key": "lab_3a9f1426570407117da67bc203a0f389043a2c3eeea93f89f8215197a9e4946a",
+      "branch_id": "default",
+      "feature_name": "hematocrit",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 383,
+      "nonfinite_conversions": 0,
+      "converted_min": 17.5,
+      "converted_max": 48.4
+    },
+    {
+      "review_key": "lab_bbd7d14b6397e11d2b9d3731673f1d01607a10e29115bb9367e283043aec9f27",
+      "branch_id": "default",
+      "feature_name": "hemoglobin",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 366,
+      "nonfinite_conversions": 0,
+      "converted_min": 5.7,
+      "converted_max": 16.1
+    },
+    {
+      "review_key": "lab_9265f85331dab92a4c822bef233170017f97a46ab623f4ce17caf62dbc4840a9",
+      "branch_id": "default",
+      "feature_name": "inr",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 173,
+      "nonfinite_conversions": 0,
+      "converted_min": 0.9,
+      "converted_max": 5.6
+    },
+    {
+      "review_key": "lab_6a744f0fca2f7c4a94ef8ecc0fbfd5c8ca3fbbb837207e68b11ebd7981c7ab65",
+      "branch_id": "default",
+      "feature_name": "mch",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 362,
+      "nonfinite_conversions": 0,
+      "converted_min": 21.4,
+      "converted_max": 38.8
+    },
+    {
+      "review_key": "lab_f3e3f7dcc02f0c5bd4c910f4a1a75e6412fd00bbe18f5fa5cc6c8e0017605359",
+      "branch_id": "default",
+      "feature_name": "mchc",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 271,
+      "nonfinite_conversions": 0,
+      "converted_min": 28.5,
+      "converted_max": 36.4
+    },
+    {
+      "review_key": "lab_561ab8dacb532ae2a2b50f575690d7317347751ecfd1f75e3e1017198fb549f8",
+      "branch_id": "default",
+      "feature_name": "mchc",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 91,
+      "nonfinite_conversions": 0,
+      "converted_min": 28.2,
+      "converted_max": 34.9
+    },
+    {
+      "review_key": "lab_68d7a6c985b9d97246aec9449f6a0f3208987a3b8ebe1309d1228abaf0458fd5",
+      "branch_id": "default",
+      "feature_name": "mcv",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 362,
+      "nonfinite_conversions": 0,
+      "converted_min": 70.0,
+      "converted_max": 120.0
+    },
+    {
+      "review_key": "lab_8eeb6cfa665a1588796272a3bf6f2341f0a512214262d61c0d65d98b34c623bf",
+      "branch_id": "default",
+      "feature_name": "platelet_count",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 365,
+      "nonfinite_conversions": 0,
+      "converted_min": 7.0,
+      "converted_max": 1133.0
+    },
+    {
+      "review_key": "lab_e3959b6c6f47806a660544c709aac8396c5b81ec5508c6e3dbe14ddbe49c6f64",
+      "branch_id": "default",
+      "feature_name": "ptt",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 165,
+      "nonfinite_conversions": 0,
+      "converted_min": 20.6,
+      "converted_max": 150.0
+    },
+    {
+      "review_key": "lab_363754a245719e1c72935543044d68ed71aa1bbc5ebf2e1936ee1f4a4de81c00",
+      "branch_id": "default",
+      "feature_name": "rdw",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 362,
+      "nonfinite_conversions": 0,
+      "converted_min": 11.0,
+      "converted_max": 27.0
+    },
+    {
+      "review_key": "lab_da3a1f8d794e1180ae1613b25b70f57689b0b84bddec4b968b5ee27168fdad35",
+      "branch_id": "default",
+      "feature_name": "rbc",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 362,
+      "nonfinite_conversions": 0,
+      "converted_min": 1.77,
+      "converted_max": 5.44
+    },
+    {
+      "review_key": "lab_e8539c40ef2de78970365ad79a9779d25124a20a0d83547c3276683b2da279fc",
+      "branch_id": "default",
+      "feature_name": "wbc",
+      "missing_specimen": 0,
+      "numeric_disagreement": 0,
+      "conflicting_id": 0,
+      "numeric_records": 360,
+      "nonfinite_conversions": 0,
+      "converted_min": 0.1,
+      "converted_max": 72.4
+    }
+  ],
+  "production_review_published": false,
+  "dictionary_frozen": false,
+  "ehr_features_ready": false,
+  "mchc_pairing_evidence": {
+    "scope": "Full cached patient history, not study coverage. Unambiguous numeric Hb/Hct/MCHC pairs matched by patient, admission, specimen and charttime.",
+    "percent_pairs": 6770,
+    "percent_pairs_with_abs_difference_le_0_5": 6760,
+    "g_dl_pairs": 5357,
+    "g_dl_pairs_with_abs_difference_le_0_5": 5357,
+    "handling": "Descriptive evidence only; no discrepancy filter, numerical replacement or recalculation is approved."
+  }
+}

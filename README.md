@@ -1,5 +1,13 @@
 # ICU Risk
 
+Step 10A is available through `scripts/10_build_ehr_features.py --mode audit`.
+It audits laboratory records, validates explicit batched review decisions, and
+freezes a versioned laboratory dictionary. Follow the
+[Step 10A review guide](docs/codex/STEP_10A_LABORATORY_REVIEW.md) for evidence
+files, review fields, cumulative inputs, and freeze commands. Full-data runs
+are performed by the user; Codex uses synthetic tests and read-only checks.
+EHR aggregation and training-package export follow laboratory review.
+
 ## Configuration for the raw data audit
 
 Configuration files use standard JSON. Do not add `//` or `/* ... */` comments to
@@ -1004,3 +1012,68 @@ Step 09 does not extract EHR features or export a training package. After the
 patient assignments and group summaries pass review, the next stage can audit
 and freeze the laboratory dictionary and build features using the same cohort
 and patient assignments.
+
+## Step 10B: EHR feature audit and publication
+
+The independent Step 10B entry uses the frozen `lab_dictionary_v1` without
+changing Step 10A code or publication records. The approved 25 laboratory
+items produce six aggregates each. Seven static/context features bring the
+whitelist to 152 numeric and five categorical columns, plus `sample_id`.
+
+```powershell
+python scripts/10b_build_ehr_features.py --mode audit `
+  --dictionary-version lab_dictionary_v1
+```
+
+Inspect the audit and blocking conflicts before running build. The user runs
+the complete pipeline; Codex runs synthetic tests and checks actual artifacts
+read-only. Missing measurements retain every frozen study. No imputation,
+scaling or model fitting is performed.
+
+```powershell
+python scripts/10b_build_ehr_features.py --mode build `
+  --dictionary-version lab_dictionary_v1 `
+  --feature-set-version ehr_features_v1
+```
+
+See [Step 10B execution](configs/reviews/step_10b_execution_v1.md) for output
+locations, source limitations, audit gates and immutable-version behavior.
+Feature publication does not complete Steps 11-12.
+
+## Step 11: portable directory and ZIP
+
+Export the approved frozen cohort, split and EHR feature set with:
+
+```powershell
+python scripts/11_export_training_package.py
+```
+
+The independent `configs/training_export_v1.json` selects
+`burden_v2_h72_r01`. Export copies the existing 473 NPY files and frozen EHR
+bytes, builds V1 samples and summaries, and publishes the directory plus a
+matching ZIP under `data/processed/training/`. No pixel processing or model
+preprocessing is performed. Local provenance remains outside the portable package.
+
+Identical reruns verify and reuse immutable contents; changed bindings require
+a new release. The user runs the complete export; Codex runs synthetic tests
+and verifies actual outputs read-only. Independent Step 12 validation remains
+pending after export. See [Step 11 execution](configs/reviews/step_11_execution_v1.md).
+
+## Step 12: independent validation and acceptance
+
+```powershell
+python scripts/12_validate_training_package.py
+```
+
+The independent validator checks frozen provenance, V1 sample/feature contracts,
+reconstructs laboratory and static features from bound audit evidence, checks
+all images, recomputes summaries and loads the ZIP from a temporary directory.
+It publishes `outputs/audit/burden_v2/training_package_acceptance.json` and
+leakage/cross-file reports. Every mandatory check must pass; failure publishes
+a rejected record and exits nonzero. Model-stage preprocessing remains deferred.
+
+The immutable directory and ZIP remain unchanged. Historical export metadata
+continues to describe Step 11; the matching external Step 12 record determines
+acceptance. The user runs complete validation; Codex runs synthetic tests and
+verifies actual outputs read-only. See [Step 12 execution](configs/reviews/step_12_execution_v1.md)
+for report locations, statuses and recovery behavior.
