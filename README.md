@@ -73,7 +73,7 @@ Each step prints its findings and publishes
 `outputs/audit/step_XX_csv_tail_checks.csv`. Its main audit report includes the
 detail report name and counts of incomplete inputs, unverified checks and skipped
 records. The detail report distinguishes `complete`, `incomplete`, `unverified`,
-`invalid`, `unreadable` and `missing`. Steps 03 and 06 parse no CSV records and
+`invalid`, `unreadable` and `missing`. Steps 03, 06 and 08 parse no CSV records and
 record `no_csv_inputs`. Step 07 also records `no_csv_inputs` unless `--reviews`
 supplies an image-review CSV; that file uses the same final-record checks.
 Step 06 hashes review inputs without parsing them and
@@ -829,3 +829,88 @@ current outputs: older unreferenced NPYs or previews may remain on disk. Step 07
 does not create the final image manifest, common cohort, patient split, features
 or training package. Once QC and required reviews pass, Step 08 can separately
 freeze the common cohort.
+
+## Step 08: freeze the common cohort
+
+After Step 07 reports `image_checks_passed=true`, `qc_review_complete=true` and
+`ready_for_cohort_freeze=true`, run:
+
+```powershell
+python scripts/08_freeze_common_cohort.py
+```
+
+No deletion or rerun of Steps 01-07 is needed. Step 06 contains all completed
+formal labels; Step 08 freezes their intersection with images that passed QC.
+The expected `burden_v2_h72_r01` release has 473 studies, 303 admissions and 222
+patients, including 34 nonzero scores, 16 `phys_death` and 12 `high_burden`.
+The audit retains all 1,537 candidates: 1,062 upstream exclusions, two image
+exclusions and 473 inclusions. QC exclusions 52318649 and 57900053 remove one
+admission but do not remove an entire patient; that patient has other included
+studies. Actual counts must reconcile with the verified upstream artifacts.
+
+The four common configuration arguments remain optional. `--processing`
+defaults to `configs/image_processing_v1.json`. The horizon comes exclusively
+from the frozen endpoint decision; there is no horizon or review override.
+The human-review input is located through Step 07 metadata and hashed without
+parsing CSV. Steps 02-07 manifests, current configuration/code content hashes,
+upstream run IDs, review hashes and original file versions must agree. A later
+Git commit is allowed when the bound file contents remain unchanged. Clinical
+CSV records are not rescanned; DICOM pixels are not decoded or processed.
+
+Step 08 independently reconstructs events, first times and capped scores from
+the published final evidence, validates ownership and observation boundaries,
+and compares every formal field with the audited labels. Every formal-label
+sample must have exactly one resolved QC row. Included NPYs are reloaded with
+`allow_pickle=False` and checked for protected paths, hashes, float32 type,
+224 x 224 shape, finite values and [0,1] range. Any mismatch stops publication;
+it does not create new exclusions, fill missing labels or change the decision.
+
+Current products are:
+
+- `data/processed/cohort/burden_v2/cohort.parquet`: the shared analysis cohort,
+  retaining all formal-label fields and types, with NPY paths/hashes, source
+  DICOM hashes, processing and human-QC provenance, and `cohort_version`.
+  NPY paths are relative to `data/processed/imaging/burden_v2/` and use `/`.
+- `data/processed/cohort/burden_v2/cohort_audit.parquet`: all Step 05 candidates,
+  with inclusion flags, exclusion stage/reason and QC provenance. Candidates
+  never sent to image QC have `qc_performed=0` and null QC fields. Upstream
+  excluded labels remain null; image-excluded studies retain their formal
+  labels and are not converted to zero scores.
+- `outputs/audit/burden_v2/cohort_flow.csv`, `cohort_qc_exclusions.csv`,
+  `training_feasibility.csv` and `source_overlap.csv`: study/admission/patient
+  counts, human exclusion reasons, all score bins 0-8, component/derived
+  endpoints, coverage, early events/discharge, study counts per patient and
+  stable source associations. Source overlap includes baseline and excluded
+  evidence, with qualifying associations counted separately. A source record
+  is deduplicated by component and stable key; it is not an independent patient.
+- `outputs/audit/burden_v2/cohort_freeze.json`, `step_08_report.md` and
+  `step_08_run_metadata.json`: frozen sources, release, counts, review and
+  output hashes, plus original freeze and latest verification run IDs.
+- `outputs/audit/step_08_csv_tail_checks.csv` and `step_08_manifest.json`:
+  `no_csv_inputs` and transactional publication hashes. The report references
+  the accepted Step 05 source warnings and Step 07 review CSV checks. Tail
+  warnings do not establish that clinical records are complete.
+
+The first successful publication also saves tables and reports under
+`data/processed/cohort/burden_v2/releases/burden_v2_h72_r01/` and
+`outputs/audit/burden_v2/releases/burden_v2_h72_r01/`. A repeat with the same
+version and source/configuration/code fingerprints verifies and reuses these
+snapshots, preserving their bytes and hashes. Current-path products are
+published as one transaction; failure or interruption restores the previous
+set. Do not manually remove recovery journals or backups. Step 05-07 metadata,
+formal labels and the frozen endpoint decision remain unchanged.
+
+An already frozen version cannot accept changed sources, code, configuration
+or samples. After reviewing a deliberate new release, specify its version:
+
+```powershell
+python scripts/08_freeze_common_cohort.py --release-version burden_v2_h72_r02
+```
+
+The version must match the frozen horizon. A new revision preserves older
+snapshots and switches the current products together. Snapshots retain tables,
+reports and hash provenance; they depend on the image cache and do not copy
+NPYs or constitute portable training packages. Early three-hour events and
+events before alive early discharge remain in the original labels. All later
+models must use the same frozen common cohort. Patient splitting (Step 09),
+EHR features, final image manifests and training packages are subsequent steps.
