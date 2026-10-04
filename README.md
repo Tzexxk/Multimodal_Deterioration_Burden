@@ -73,7 +73,7 @@ Each step prints its findings and publishes
 `outputs/audit/step_XX_csv_tail_checks.csv`. Its main audit report includes the
 detail report name and counts of incomplete inputs, unverified checks and skipped
 records. The detail report distinguishes `complete`, `incomplete`, `unverified`,
-`invalid`, `unreadable` and `missing`. Steps 03, 06 and 08 parse no CSV records and
+`invalid`, `unreadable` and `missing`. Steps 03, 06, 08 and 09 parse no CSV records and
 record `no_csv_inputs`. Step 07 also records `no_csv_inputs` unless `--reviews`
 supplies an image-review CSV; that file uses the same final-record checks.
 Step 06 hashes review inputs without parsing them and
@@ -914,3 +914,93 @@ NPYs or constitute portable training packages. Early three-hour events and
 events before alive early discharge remain in the original labels. All later
 models must use the same frozen common cohort. Patient splitting (Step 09),
 EHR features, final image manifests and training packages are subsequent steps.
+
+## Step 09: freeze patient-level splits
+
+After the common cohort is frozen and verified, run:
+
+```powershell
+python scripts/09_create_patient_split.py
+```
+
+No deletion or rerun of Steps 01-08 is needed. The independent
+`configs/patient_split_v1.json` records ZE Xiaokang's approved 70/15/15 patient
+ratios, seed 42, primary `ever_phys_death` stratification and high-burden coverage
+constraint. Its default cohort is `burden_v2_h72_r01` and split version is
+`burden_v2_h72_r01_split_v1`. Frozen endpoint, image and common-cohort
+configurations remain unchanged. The four common configuration arguments and
+`--processing` remain optional; `--split-config` selects a versioned JSON input.
+There are no temporary ratio or seed overrides.
+Keep split configuration inputs outside generated data and output directories.
+
+Each patient is summarized by study count, maximum score, whether any study has
+`phys_death`, and whether any has `high_burden`. Integer weights 70/15/15 determine
+overall quotas, then phys_death-positive quotas, then high-burden quotas. Every
+group must contain at least one patient and one high-burden patient. Floors are
+clipped to minimum/capacity bounds; residual seats go to the largest deficit
+from the ideal quota, or are removed from the largest excess. Ties follow
+`train`, `validation`, `test`. Remaining stratum quotas are obtained by
+subtraction. A small auxiliary stratum need not appear in every group.
+
+One NumPy `PCG64(seed=42)` generator shuffles ascending patient IDs within the
+high-burden, other phys_death-positive and phys_death-negative strata, in that
+order. Training, validation and test slices use the fixed quotas. Input row
+order cannot change assignments. No patient is hand-picked, no study-count
+optimization is performed, and seeds must not be retried using model results.
+For the current 222 patients, including 10 phys_death-positive and eight
+high-burden patients, the fixed patient quotas are:
+
+| Group | All patients | Ever phys_death | Ever high_burden |
+| --- | ---: | ---: | ---: |
+| train | 156 | 7 | 6 |
+| validation | 33 | 2 | 1 |
+| test | 33 | 1 | 1 |
+
+Study and admission counts follow patient membership and are reported after
+execution. All studies and admissions of a patient belong to one group. All
+three models must join this same patient table by `subject_id`; Step 08's cohort
+is not modified to add a split column. Patient IDs, labels and future observation
+fields remain excluded from model features. One high-burden patient in each
+evaluation group provides class coverage but does not establish stable estimates.
+Reports retain actual counts and flag binary endpoints lacking either class.
+Fewer than three high-burden patients or impossible quotas stop publication.
+
+Step 09 verifies the Step 08 manifest, freeze record and release snapshot hashes,
+and reuses upstream provenance, prepared-NPY and final-evidence checks. It does
+not scan clinical CSV records, decode DICOMs or transform pixels. Invalid keys,
+labels, provenance, paths, hashes or unresolved QC stop publication. Stable
+component/source keys linked to included studies must not cross patient splits.
+
+Products are:
+
+- `data/processed/splits/burden_v2/patient_split.parquet`: one row per patient,
+  with int64 `subject_id`, `seed`, `study_count`; string `split`, `split_version`,
+  `cohort_version`; float32 `max_burden_score`; and uint8 `ever_phys_death`,
+  `ever_high_burden`. Required fields are non-null. Split values are strictly
+  `train`, `validation`, `test`.
+- `outputs/audit/burden_v2/split_summary.csv`, `split_checks.json` and
+  `step_09_report.md`: group counts at study/admission/patient levels, score
+  bins 0-8, separately identified patient maximum-score bins, six components,
+  derived endpoints, early discharge, quotas, leakage checks and evaluability.
+  Patients and admissions can occur in several study-score bins; do not add
+  those bin counts as independent patients/admissions.
+- `outputs/audit/burden_v2/split_freeze.json`, `step_09_run_metadata.json`, and
+  `outputs/audit/step_09_csv_tail_checks.csv` / `step_09_manifest.json`:
+  frozen configuration, sources and output hashes, original split and latest
+  verification run IDs, `no_csv_inputs` and transaction checksums. Accepted
+  Step 05 source warnings and Step 07 review checks remain referenced.
+
+First publication saves immutable snapshots under both split-data and audit
+`releases/burden_v2_h72_r01_split_v1/` directories. Identical-version reruns
+verify and reuse original assignments, preserving table and snapshot hashes.
+Changed sources, parameters or code cannot overwrite that version; a deliberate
+new split version requires a separately approved configuration. Binding uses
+the common cohort's original freeze and contents. A Step 08 verification-only
+rerun or a later Git commit with unchanged bound content does not invalidate
+the split. Current outputs are published together; failure/interruption restores
+the previous set. Do not delete recovery journals or backups.
+
+Step 09 does not extract EHR features or export a training package. After the
+patient assignments and group summaries pass review, the next stage can audit
+and freeze the laboratory dictionary and build features using the same cohort
+and patient assignments.

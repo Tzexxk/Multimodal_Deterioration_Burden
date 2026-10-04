@@ -1,0 +1,13 @@
+{
+  "cohort_version": "burden_v2_h72_r01",
+  "split_version": "burden_v2_h72_r01_split_v1",
+  "algorithm_version": "patient_stratified_pcg64_v1",
+  "weights": [70, 15, 15],
+  "seed": 42,
+  "primary_stratum": "ever_phys_death",
+  "require_high_burden_in_each_split": true,
+  "confirmed": true,
+  "reviewer": "ZE Xiaokang",
+  "reviewed_on": "2026-10-04",
+  "rationale": "Approved patient-level 70/15/15 allocation with seed 42, primary phys_death stratification and at least one high-burden patient in each split. Patients are randomized within fixed strata; seeds and assignments must not be selected using model performance."
+}
