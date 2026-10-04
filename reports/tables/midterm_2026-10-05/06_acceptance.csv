@@ -1,0 +1,11 @@
+check,status
+provenance,pass
+samples,pass
+ehr contract,pass
+laboratory reconstruction,pass
+static reconstruction,pass
+images,pass
+metadata summary,pass
+zip relocation,pass
+source stability,pass
+train only model preprocessing,not_applicable

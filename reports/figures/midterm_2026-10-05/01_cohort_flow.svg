@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="972pt" height="540pt" viewBox="0 0 972 540" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-05T07:39:28.797334</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.2, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 540 
+L 972 540 
+L 972 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 181.764 159.1866 
+L 618.678 159.1866 
+Q 627.7176 159.1866 627.7176 154.197 
+L 627.7176 108.459 
+Q 627.7176 103.4694 618.678 103.4694 
+L 181.764 103.4694 
+Q 172.7244 103.4694 172.7244 108.459 
+L 172.7244 154.197 
+Q 172.7244 159.1866 181.764 159.1866 
+z
+" clip-path="url(#p98fa3fca66)" style="fill: #e9f1f8; stroke: #24558a; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 181.764 221.5566 
+L 618.678 221.5566 
+Q 627.7176 221.5566 627.7176 216.567 
+L 627.7176 170.829 
+Q 627.7176 165.8394 618.678 165.8394 
+L 181.764 165.8394 
+Q 172.7244 165.8394 172.7244 170.829 
+L 172.7244 216.567 
+Q 172.7244 221.5566 181.764 221.5566 
+z
+" clip-path="url(#p98fa3fca66)" style="fill: #e9f1f8; stroke: #24558a; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 181.764 283.9266 
+L 618.678 283.9266 
+Q 627.7176 283.9266 627.7176 278.937 
+L 627.7176 233.199 
+Q 627.7176 228.2094 618.678 228.2094 
+L 181.764 228.2094 
+Q 172.7244 228.2094 172.7244 233.199 
+L 172.7244 278.937 
+Q 172.7244 283.9266 181.764 283.9266 
+z
+" clip-path="url(#p98fa3fca66)" style="fill: #e9f1f8; stroke: #24558a; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 181.764 346.2966 
+L 618.678 346.2966 
+Q 627.7176 346.2966 627.7176 341.307 
+L 627.7176 295.569 
+Q 627.7176 290.5794 618.678 290.5794 
+L 181.764 290.5794 
+Q 172.7244 290.5794 172.7244 295.569 
+L 172.7244 341.307 
+Q 172.7244 346.2966 181.764 346.2966 
+z
+" clip-path="url(#p98fa3fca66)" style="fill: #e9f1f8; stroke: #24558a; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 181.764 408.6666 
+L 618.678 408.6666 
+Q 627.7176 408.6666 627.7176 403.677 
+L 627.7176 357.939 
+Q 627.7176 352.9494 618.678 352.9494 
+L 181.764 352.9494 
+Q 172.7244 352.9494 172.7244 357.939 
+L 172.7244 403.677 
+Q 172.7244 408.6666 181.764 408.6666 
+z
+" clip-path="url(#p98fa3fca66)" style="fill: #e9f1f8; stroke: #24558a; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_1">
+    <text style="font-size: 14px; font-family: 'DejaVu Sans'; fill: #24558a" transform="translate(335.39225 126.563352)">Local indexed CXR</text>
+    <text style="font-size: 14px; font-family: 'DejaVu Sans'; fill: #24558a" transform="translate(352.506156 143.36718)">5,534 images</text>
+   </g>
+   <g id="patch_7">
+    <path d="M 400.221 160.355834 
+Q 400.221 164.591381 400.221 167.708894 
+" style="fill: none; stroke: #24558a; stroke-linecap: round"/>
+    <path d="M 402.821 162.508894 
+L 400.221 167.708894 
+L 397.621 162.508894 
+" style="fill: none; stroke: #24558a; stroke-linecap: round"/>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start" x="656.343" y="134.445656" transform="rotate(-0 656.343 134.445656)">3,351 studies; local CXR subset</text>
+   </g>
+   <g id="text_3">
+    <text style="font-size: 14px; font-family: 'DejaVu Sans'; fill: #24558a" transform="translate(320.956937 188.933352)">Frontal study selection</text>
+    <text style="font-size: 14px; font-family: 'DejaVu Sans'; fill: #24558a" transform="translate(352.78725 205.73718)">3,231 studies</text>
+   </g>
+   <g id="patch_8">
+    <path d="M 400.221 222.725834 
+Q 400.221 226.961381 400.221 230.078894 
+" style="fill: none; stroke: #24558a; stroke-linecap: round"/>
+    <path d="M 402.821 224.878894 
+L 400.221 230.078894 
+L 397.621 224.878894 
+" style="fill: none; stroke: #24558a; stroke-linecap: round"/>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start" x="656.343" y="196.815656" transform="rotate(-0 656.343 196.815656)">120 studies without frontal images</text>
+   </g>
+   <g id="text_5">
+    <text style="font-size: 14px; font-family: 'DejaVu Sans'; fill: #24558a" transform="translate(313.488812 251.303352)">Unique admission match</text>
+    <text style="font-size: 14px; font-family: 'DejaVu Sans'; fill: #24558a" transform="translate(352.78725 268.10718)">1,537 studies</text>
+   </g>
+   <g id="patch_9">
+    <path d="M 400.221 285.095834 
+Q 400.221 289.331381 400.221 292.448894 
+" style="fill: none; stroke: #24558a; stroke-linecap: round"/>
+    <path d="M 402.821 287.248894 
+L 400.221 292.448894 
+L 397.621 287.248894 
+" style="fill: none; stroke: #24558a; stroke-linecap: round"/>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start" x="656.343" y="259.185656" transform="rotate(-0 656.343 259.185656)">1,694 studies without admission match</text>
+   </g>
+   <g id="text_7">
+    <text style="font-size: 14px; font-family: 'DejaVu Sans'; fill: #24558a" transform="translate(318.911625 313.673352)">Reviewed formal labels</text>
+    <text style="font-size: 14px; font-family: 'DejaVu Sans'; fill: #24558a" transform="translate(359.465688 330.47718)">475 studies</text>
+   </g>
+   <g id="patch_10">
+    <path d="M 400.221 347.465834 
+Q 400.221 351.701381 400.221 354.818894 
+" style="fill: none; stroke: #24558a; stroke-linecap: round"/>
+    <path d="M 402.821 349.618894 
+L 400.221 354.818894 
+L 397.621 349.618894 
+" style="fill: none; stroke: #24558a; stroke-linecap: round"/>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start" x="656.343" y="321.555656" transform="rotate(-0 656.343 321.555656)">1,062 upstream exclusions</text>
+   </g>
+   <g id="text_9">
+    <text style="font-size: 14px; font-family: 'DejaVu Sans'; fill: #24558a" transform="translate(303.680062 376.043352)">Image QC / common cohort</text>
+    <text style="font-size: 14px; font-family: 'DejaVu Sans'; fill: #24558a" transform="translate(359.465688 392.84718)">473 studies</text>
+   </g>
+   <g id="text_10">
+    <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start" x="656.343" y="383.925656" transform="rotate(-0 656.343 383.925656)">2 studies excluded by image QC</text>
+   </g>
+   <g id="text_11">
+    <text style="font-size: 21px; font-family: 'DejaVu Sans'; text-anchor: middle" x="498.15" y="46.8" transform="rotate(-0 498.15 46.8)">A common cohort for three model comparisons</text>
+   </g>
+  </g>
+  <g id="text_12">
+   <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #46556a" x="29.16" y="524.097656" transform="rotate(-0 29.16 524.097656)">Counts change from images to studies. Final cohort: 473 studies / 303 admissions / 222 patients.</text>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p98fa3fca66">
+   <rect x="121.5" y="64.8" width="753.3" height="415.8"/>
+  </clipPath>
+ </defs>
+</svg>

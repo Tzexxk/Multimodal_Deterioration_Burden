@@ -1,0 +1,10 @@
+exclusion_reason,studies
+icu_at_t0,751
+Medication identity cannot be uniquely confirmed,154
+excluded_careunit_at_t0,85
+Pre-admission medication record with unresolved identity,51
+Invasive ventilation evidence or onset cannot be verified,12
+Conflicting care-unit sources at t0,4
+Medication event cannot establish actual administration or new onset,2
+death_time_conflict;icu_at_t0,2
+Unable to verify care unit at t0,1

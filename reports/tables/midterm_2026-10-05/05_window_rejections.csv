@@ -1,0 +1,7 @@
+availability_reason,ownership_reason,study_associations
+available,different_admission,21
+available,no_admission_match,2745
+future_storetime,no_admission_match,56
+future_storetime,owned,1996
+missing_storetime,no_admission_match,157
+missing_storetime,owned,108

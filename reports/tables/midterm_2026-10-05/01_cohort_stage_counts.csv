@@ -1,0 +1,6 @@
+stage,studies,admissions,patients
+all_candidates,1537,567,383
+upstream_excluded,1062,339,271
+formal_labels,475,304,222
+qc_excluded,2,1,1
+common_cohort,473,303,222

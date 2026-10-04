@@ -1,0 +1,6 @@
+label,count,unit,note
+Local indexed CXR,5534,images,"3,351 studies; local CXR subset"
+Frontal study selection,3231,studies,120 studies without frontal images
+Unique admission match,1537,studies,"1,694 studies without admission match"
+Reviewed formal labels,475,studies,"1,062 upstream exclusions"
+Image QC / common cohort,473,studies,2 studies excluded by image QC

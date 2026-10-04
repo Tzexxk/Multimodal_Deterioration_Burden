@@ -1,0 +1,9 @@
+component,label,studies,patients,study_denominator,patient_denominator
+new_icu_ccu_transfer,New ICU/CCU transfer,28,21,473,222
+new_stepdown_transfer,New stepdown transfer,0,0,473,222
+new_invasive_ventilation,New invasive ventilation,11,6,473,222
+new_severe_hypoxemia,New severe hypoxemia,3,2,473,222
+new_iv_vaso_inotrope_infusion,New IV vasoactive infusion,2,2,473,222
+in_hospital_death,In-hospital death,2,1,473,222
+phys_death,Physiologic deterioration / death,16,10,473,222
+high_burden,High burden (score >= 3),12,8,473,222

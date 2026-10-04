@@ -1,0 +1,4 @@
+split,studies,admissions,patients,phys_death_patients,high_burden_patients
+train,337,218,156,7,6
+validation,69,44,33,2,1
+test,67,41,33,1,1

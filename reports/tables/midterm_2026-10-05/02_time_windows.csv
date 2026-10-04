@@ -1,0 +1,3 @@
+window,start_hours,maximum_end_hours,boundary,rule
+lab_charttime,-24,0,inclusive,charttime <= storetime <= t0; ownership required
+outcome,0,72,"left open, right closed",end at frozen observation_end; discharge may shorten window
