@@ -74,7 +74,9 @@ Each step prints its findings and publishes
 detail report name and counts of incomplete inputs, unverified checks and skipped
 records. The detail report distinguishes `complete`, `incomplete`, `unverified`,
 `invalid`, `unreadable` and `missing`. Steps 03 and 06 parse no CSV records and
-record `no_csv_inputs`. Step 06 hashes review inputs without parsing them and
+record `no_csv_inputs`. Step 07 also records `no_csv_inputs` unless `--reviews`
+supplies an image-review CSV; that file uses the same final-record checks.
+Step 06 hashes review inputs without parsing them and
 references the Step 05 source checks. `skipped_rows` counts the distinct final record skipped by an
 application reader; a sample-only screen can detect an incomplete tail without
 encountering or skipping it.
@@ -705,9 +707,125 @@ Run all synthetic checks without scanning the real datasets:
 
 ```powershell
 python -B -m unittest discover -s tests/cohort -p "test_*.py" -v
-ruff check --no-cache src/cohort scripts tests/cohort
+ruff check --no-cache src/cohort src/imaging scripts tests/cohort
 ```
 
 These checks exercise both windows, clinical boundaries, support continuity,
 source ownership, overrides and failed publication. Full-data runtime and actual
 clinical dictionary review remain part of the user-run audit.
+
+## Step 07: deterministic image preparation and QC
+
+After Step 06 succeeds, run:
+
+```powershell
+python scripts/07_qc_and_prepare_images.py
+```
+
+No deletion or Step 01-06 rerun is needed while their sources remain unchanged.
+Step 07 processes only the selected images for formal labels: currently 475
+studies, 304 admissions and 222 patients, with 317 AP and 158 PA images. It
+verifies Steps 02-06 manifests, the frozen 72-hour decision, label provenance,
+image keys, paths, view, acquisition time and indexed dimensions. It does not
+select another image or change any outcome label. Source metadata contradictions
+stop publication; missing or undecodable individual files receive QC failures
+while other images continue.
+
+The four common configuration arguments remain optional. `--processing` defaults
+to `configs/image_processing_v1.json`; keep image-processing settings independent
+of the frozen `imaging.json` and endpoint configurations. The V1 settings specify
+224 x 224, valid-pixel 1st/99th percentiles using NumPy's linear method, bilinear
+resize, nearest-neighbor masks, half-up dimension rounding and zero padding.
+Review sampling uses seed 42 and at most five normal images per
+view/polarity/modality/VOI/presentation processing group.
+
+Processing revision `burden_v2_images_v2` corrects the DX VOI LUT depth check:
+Digital X-Ray for Presentation/Processing permits 10-16 bits under
+[DICOM PS3.3 C.8.11.3.1.5](https://dicom.nema.org/medical/dicom/current/output/chtml/part03/sect_C.8.11.3.html#sect_C.8.11.3.1.5).
+General Modality/VOI LUT depth checks remain 8/16 bits. The first Step 07 run
+(`23c130f4096e4d2aab5670d8da9757c9`) incorrectly flagged DX 14-bit VOI LUTs and
+used windows instead. Rerun only Step 07 before reviewing its new previews and
+fixed sample list. Header-only inspection identified 117 affected DX files with
+valid 14-bit VOI LUTs. Two other files have CR SOP classes, 12-bit VOI LUTs and
+no window; their metadata uncertainty remains pending review under the general
+VOI rule. The configuration filename stays `image_processing_v1.json`;
+its independent processing revision and SHA-256 change. Previous source/config/NPY
+review fingerprints cannot authorize the revised outputs. Steps 05-06 and the
+frozen endpoint decision remain unchanged.
+
+The shared transformation decodes a single grayscale frame, identifies padding
+in raw pixel space, and applies a valid Modality LUT or rescale (defaults 1/0),
+the first valid VOI LUT or window, then one display-direction conversion.
+Presentation LUT output is treated as P-values; shape and photometric metadata
+must agree. Without a presentation transform, MONOCHROME1 is inverted once and
+MONOCHROME2 is retained. Non-padding pixels determine percentile clipping to
+[0,1]. Aspect ratio is preserved when resizing; odd leftover borders go below
+or to the right. Padding remains zero. Each NPY is reloaded with
+`allow_pickle=False` and checked for float32 type, 224 x 224 shape, finite values,
+range and SHA-256. There is no augmentation, crop, rotation, text removal,
+three-channel replication or model-specific normalization.
+
+Published products are:
+
+- `data/processed/imaging/burden_v2/image_processing.parquet` and
+  `image_qc_status.parquet`: one row per formal-label study, including failures,
+  with source versions/hashes, transformations, dimensions, percentiles,
+  padding, current NPY reference/hash, automated status and manual decisions.
+- `data/processed/imaging/burden_v2/images/pXX/p<subject_id>/s<study_id>.npy`:
+  completed deterministic transformations only. Failed or unreliable
+  transformations have no NPY; zero-image substitutes are never produced.
+- `outputs/qc/burden_v2/image_qc_review.html` and its PNG previews: local review
+  page showing before/after images, display method, flags and errors. Outcome
+  scores and event labels are hidden. An available raw-value preview for an
+  incomplete transform is explicitly marked as non-diagnostic.
+- `outputs/qc/burden_v2/review_sample.csv`, `duplicate_images.csv`,
+  `dicom_failures.csv` and `image_qc_review.csv`: fixed normal-image sample,
+  source/decoded-pixel/NPY exact duplicate groups, processing failures and the
+  required-review template. Empty reports retain headers.
+- `outputs/qc/burden_v2/qc_report.md`, `run_metadata.json`, and
+  `outputs/audit/step_07_csv_tail_checks.csv` / `step_07_manifest.json`:
+  counts, review progress, provenance, CSV checks and publication checksums.
+
+Normal images passing automatic checks and outside the fixed sample are `pass`.
+Sampled images, metadata concerns and suspected duplicates are `pending_review`;
+duplicates are never automatically discarded. Hard failures are `fail`, with
+their manual acknowledgment tracked separately. `image_checks_passed=true`
+means the run's structural checks passed, not that every image passed QC.
+All required reviews must be resolved before `qc_review_complete=true`.
+
+After the first run:
+
+1. Open `outputs/qc/burden_v2/image_qc_review.html` in a browser. It initially
+   shows required reviews; the button also exposes all other images. Inspect
+   grayscale direction, lung coverage, proportions, padding, clipping, artifacts,
+   text and AP/PA. Review every failure, anomaly, duplicate and sampled image.
+2. Copy the generated `image_qc_review.csv` to an independent versioned input,
+   for example `configs/reviews/image_qc_reviews_v1.csv`. Keep `sample_id` and
+   all three fingerprints unchanged. Fill `decision` (`pass` or `exclude`),
+   `rationale`, `reviewer`, ISO `reviewed_on` date and a single `version` for the
+   file. Preserve the optional `source_run_id` provenance column. For partial
+   review batches, include only completed decisions; unreviewed studies remain
+   pending. Do not fill in a missing source or NPY hash.
+3. Rerun only Step 07 with the versioned decisions:
+
+   ```powershell
+   python scripts/07_qc_and_prepare_images.py --reviews configs/reviews/image_qc_reviews_v1.csv
+   ```
+
+A manual pass requires a completed, validated NPY and cannot bypass a hard
+failure. Such an image needs corrected processing and a new run, or an explicit
+exclusion. A decision applies only to the exact source DICOM, processing
+configuration and NPY hashes; changed fingerprints stop publication rather than
+silently reusing old approval. Unknown sample references, conflicting decisions
+and invalid CSV fields also stop publication. An incomplete final review record
+is warned about and skipped under the shared EOF policy; earlier valid decisions
+still apply and the omitted study remains unreviewed. Review the file's source
+manually if its tail check reports a warning.
+
+A successful rerun transactionally replaces current Step 07 files; failure
+preserves or restores the previous set. Do not delete recovery journals or
+backups. Only files referenced by current tables and the current manifest are
+current outputs: older unreferenced NPYs or previews may remain on disk. Step 07
+does not create the final image manifest, common cohort, patient split, features
+or training package. Once QC and required reviews pass, Step 08 can separately
+freeze the common cohort.

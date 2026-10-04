@@ -1,0 +1,13 @@
+{
+  "processing_version": "burden_v2_images_v2",
+  "size": 224,
+  "percentiles": [1, 99],
+  "percentile_method": "linear",
+  "interpolation": "bilinear",
+  "mask_interpolation": "nearest",
+  "padding_value": 0,
+  "rounding": "half_up",
+  "preview_size": 768,
+  "review_seed": 42,
+  "review_per_group": 5
+}
