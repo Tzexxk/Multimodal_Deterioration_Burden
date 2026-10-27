@@ -1,0 +1,17 @@
+{
+  "audit_version": "lab_audit_r02",
+  "algorithm_version": "lab_audit_review_v1",
+  "cohort_version": "burden_v2_h72_r02",
+  "split_version": "burden_v2_h72_r02_split_v1",
+  "lookback_hours": 24,
+  "memory_limit": "2GB",
+  "batch_item_limit": 10,
+  "example_limit": 5,
+  "comment_max_chars": 512,
+  "reviewer": "ZE Xiaokang",
+  "tables": {
+    "d_labitems": "hosp/d_labitems.csv",
+    "labevents": "hosp/labevents.csv",
+    "admissions": "hosp/admissions.csv"
+  }
+}

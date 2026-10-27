@@ -243,6 +243,27 @@ class LaboratoryTests(unittest.TestCase):
         self.addCleanup(connection.close)
         return connection
 
+    def test_r02_settings_and_explicit_cache_root(self):
+        settings = step.load_settings(PROJECT / "configs/lab_processing_r02.json")
+        self.assertEqual(settings["cohort_version"], "burden_v2_h72_r02")
+        settings["split_version"] = "burden_v2_h72_r01_split_v1"
+        self.config.write_text(json.dumps(settings))
+        with self.assertRaisesRegex(ValueError, "versions must agree"):
+            step.load_settings(self.config)
+        self.config.write_text(json.dumps(self.settings))
+        paths = json.loads(self.configs[0].read_text())
+        cache = self.processed / "supplementary_r02/cache"
+        paths["cache"] = str(cache)
+        self.configs[0].write_text(json.dumps(paths))
+        self.run_mode()
+        self.assertTrue(
+            all(
+                Path(p).is_relative_to(cache)
+                for p in self.record()["cache_paths"].values()
+            )
+        )
+        self.assertFalse((self.processed.parent / "cache").exists())
+
     def test_inventory_cache_and_full_freeze_reuse(self):
         original = {p: p.read_bytes() for p in (self.raw / "hosp").iterdir()}
         self.run_mode()

@@ -479,6 +479,10 @@ def verify_inputs(root: Path, args, settings: dict) -> dict:
         / upstream.load_settings(args.lab_config)["audit_version"]
         / "lab_audit_manifest.json",
     )
+    for field in ("cohort_decisions_path", "event_decisions_path"):
+        review_path = _json_file(args.cohort)["burden_v2"].get(field)
+        if review_path:
+            files[field] = _resolve_config_path(review_path, root, raw=False)
     for name, digest in frozen["artifact_sha256"].items():
         if _file_hash(data / name) != digest:
             raise ValueError("Current EHR file differs from its freeze")

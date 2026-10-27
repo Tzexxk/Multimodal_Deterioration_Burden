@@ -61,7 +61,11 @@ def _audit_code_hash() -> str:
 
 
 def verify_frozen_inputs(
-    root: Path, config_files: list[Path]
+    root: Path,
+    config_files: list[Path],
+    *,
+    decision_file: Path | None = None,
+    window_file: Path | None = None,
 ) -> tuple[dict, dict, dict]:
     """Hash review inputs and stat raw sources; never parse or scan raw CSVs."""
     paths, cohort, ehr, imaging = map(_json_file, config_files)
@@ -70,7 +74,7 @@ def verify_frozen_inputs(
     outputs = _resolve_config_path(paths["outputs"], root, raw=False)
     _protect_outputs(paths, root, processed, outputs)
     decision_path = outputs / "audit/burden_v2/endpoint_decision.json"
-    decision = _json_file(decision_path)
+    decision = _json_file(decision_file or decision_path)
     expected = {
         "decision_status": "frozen",
         "horizon_frozen": True,
@@ -134,7 +138,7 @@ def verify_frozen_inputs(
     ):
         if (
             _under_root(root, decision[f"{key}_path"]) != path
-            or _file_hash(path) != decision[f"{key}_sha256"]
+            or _file_hash(window_file or path) != decision[f"{key}_sha256"]
         ):
             raise ValueError("Window decision changed")
     selection = decision["selection_record"]
@@ -144,6 +148,7 @@ def verify_frozen_inputs(
     for field, hash_field in (
         ("overrides_path", "override_sha256"),
         ("candidate_exclusions_path", "candidate_exclusions_sha256"),
+        *audit.REVIEW_PATHS.items(),
     ):
         path = (
             _resolve_config_path(rules[field], root, raw=False)
@@ -151,10 +156,29 @@ def verify_frozen_inputs(
             else None
         )
         digest = _file_hash(path) if path else None
-        if digest != metadata[hash_field] or digest != decision[hash_field]:
+        if digest != metadata.get(hash_field) or digest != decision.get(hash_field):
             raise ValueError(f"Frozen {field} changed")
         if path:
             extra_files.append(path)
+    for name, digest in metadata.get("review_snapshot_bindings", {}).items():
+        path = _under_root(root, name)
+        if _file_hash(path) != digest:
+            raise ValueError("Frozen review snapshot binding changed")
+        audit.verify_snapshot(path)
+    if decision.get("baseline_reference_bindings", {}) != metadata.get(
+        "baseline_reference_bindings", {}
+    ):
+        raise ValueError("Baseline reference set changed")
+    for name, digest in metadata.get("baseline_reference_bindings", {}).items():
+        if _file_hash(_under_root(root, name)) != digest:
+            raise ValueError("Baseline reference changed")
+    if decision.get("review_snapshot_bindings", {}) != metadata.get(
+        "review_snapshot_bindings", {}
+    ):
+        raise ValueError("Frozen decision review snapshot set changed")
+    for name, digest in decision.get("review_records_sha256", {}).items():
+        if _file_hash(_under_root(root, name)) != digest:
+            raise ValueError("Endpoint review record changed")
     dictionary = {
         name: rules[name]
         for name in (*audit.MAPPING_ACTIONS, "medications", "spo2_units", "items")
@@ -220,7 +244,7 @@ def verify_frozen_inputs(
             "outputs": outputs,
             "artifacts": artifacts,
             "memory_limit": ehr["burden_v2"]["memory_limit"],
-            "decision_sha256": _file_hash(decision_path),
+            "decision_sha256": _file_hash(decision_file or decision_path),
         },
     )
 
@@ -321,8 +345,12 @@ def validate_labels(connection, artifacts: dict, horizon: int) -> dict:
     )
     _reject(
         connection,
-        "SELECT count(*) FROM evidence e JOIN eligible w USING(sample_id) WHERE qualifies IS NULL OR (qualifies=1 AND (event_time IS NULL OR first_event_time IS NULL OR event_time<=t0 OR event_time>observation_end OR first_event_time<=t0 OR first_event_time>observation_end))",
+        "SELECT count(*) FROM evidence e JOIN eligible w USING(sample_id) WHERE (qualifies IS NULL AND coalesce(blocks_event,1)<>0) OR (qualifies=1 AND (event_time IS NULL OR first_event_time IS NULL OR event_time<=t0 OR event_time>observation_end OR first_event_time<=t0 OR first_event_time>observation_end))",
         "Unresolved or out-of-window evidence",
+    )
+    verify_nonblocking_evidence(
+        pq.read_table(artifacts["wide"]).to_pylist(),
+        pq.read_table(artifacts["evidence"]).to_pylist(),
     )
     for c in COMPONENTS:
         _reject(
@@ -365,6 +393,62 @@ def validate_labels(connection, artifacts: dict, horizon: int) -> dict:
     if not counts["eligible_studies"]:
         raise ValueError("No formal labels to publish")
     return counts
+
+
+def verify_nonblocking_evidence(studies: list[dict], evidence_rows: list[dict]) -> None:
+    """Recheck retained uncertainty from its raw ownership, time and positive evidence."""
+    indexed = {r["sample_id"]: r for r in studies}
+    groups = {}
+    for row in evidence_rows:
+        groups.setdefault((row["sample_id"], row["component"]), []).append(row)
+    reasons = {
+        "indirect_ventilation_only",
+        "spo2_artifact_review",
+        "conflicting_spo2_at_same_time",
+        "unconfirmed_transfer_mapping_or_origin",
+    }
+    for (sample, component), records in groups.items():
+        study = indexed[sample]
+        if study["candidate_status"] != "eligible":
+            continue
+        positive = [r["event_time"] for r in records if r["qualifies"] == 1]
+        for row in records:
+            if row["qualifies"] is not None:
+                continue
+            raw = json.loads(row["raw_evidence"])
+            if row["blocks_event"] != 0 or (
+                str(raw.get("subject_id")) != str(study["subject_id"])
+                or str(raw.get("hadm_id")) != str(study["hadm_id"])
+            ):
+                raise ValueError(
+                    "Unresolved evidence cannot be independently justified"
+                )
+            if row["uncertainty_relevance"] == "independent_after_confirmed_positive":
+                valid = (
+                    positive
+                    and row["event_time"] is not None
+                    and row["event_time"] > min(positive)
+                    and row["exclusion_reason"] in reasons
+                )
+            elif row["uncertainty_relevance"] == "history_without_window_infusion":
+                valid = (
+                    component == COMPONENTS[4]
+                    and row["event_time"] is not None
+                    and row["event_time"] <= study["t0"]
+                    and not any(
+                        r["event_time"] is not None
+                        and study["t0"] < r["event_time"] <= study["observation_end"]
+                        and r["exclusion_reason"]
+                        != "excluded_medication_or_administration"
+                        for r in records
+                    )
+                )
+            else:
+                valid = False
+            if not valid:
+                raise ValueError(
+                    "Unresolved evidence has an invalid nonblocking classification"
+                )
 
 
 def _write_query(connection, run: _OutputRun, path: Path, query: str) -> None:

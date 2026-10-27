@@ -16,6 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import test_burden_audit as fixtures
 
+from src.cohort.audit_burden_labels import freeze_endpoint
 from src.cohort.build_labels import build_burden_labels, verify_frozen_inputs
 from src.cohort.burden_io import COMPONENTS
 from src.cohort.common import _file_hash, _json_file, _verify_run
@@ -164,6 +165,102 @@ class FormalLabelTests(unittest.TestCase):
             self.assertEqual(build_burden_labels(self.root, *self.configs), 0)
         _verify_run(self.fixture.outputs, 6)
         return pq.read_table(self.data / "study_burden_labels.parquet")
+
+    def endpoint_review(self):
+        metadata = _json_file(self.audit / "run_metadata.json")
+        path = self.root / "configs/endpoint_review.json"
+        self.write_json(
+            path,
+            dict(
+                confirmed=True,
+                decision_version="synthetic_endpoint_r02",
+                reviewer="synthetic_reviewer",
+                reviewed_on="2026-10-08",
+                rationale="Synthetic explicit 72-hour review",
+                rules_revision="Synthetic supplementary revision",
+                horizon_hours=72,
+                source_run_id=metadata["run_id"],
+                source_manifest_sha256=_file_hash(
+                    self.fixture.outputs / "audit/step_05_manifest.json"
+                ),
+                review_records=[self.configs[1].relative_to(self.root).as_posix()],
+            ),
+        )
+        return path
+
+    def test_step05_freeze_transaction_and_immutable_binding(self):
+        self.fixture.prepare()
+        self.fixture.run_audit()
+        review = self.endpoint_review()
+        marker = self.fixture.outputs / "audit/step_05_manifest.json"
+        before = marker.read_bytes()
+        original = os.replace
+
+        def fail_window(source, target):
+            if (
+                Path(target).name == "window_decision.md"
+                and ".step_05_stage_" in Path(source).name
+            ):
+                raise OSError("synthetic freeze interruption")
+            return original(source, target)
+
+        with patch("src.cohort.common.os.replace", side_effect=fail_window):
+            with self.assertRaisesRegex(OSError, "freeze interruption"):
+                freeze_endpoint(self.root, *self.configs, review)
+        self.assertFalse((self.audit / "endpoint_decision.json").exists())
+        self.assertFalse((self.audit / "window_decision.md").exists())
+        self.assertEqual(marker.read_bytes(), before)
+        self.assertEqual(freeze_endpoint(self.root, *self.configs, review), 0)
+        frozen = (self.audit / "endpoint_decision.json").read_bytes()
+        self.assertEqual(freeze_endpoint(self.root, *self.configs, review), 0)
+        self.assertEqual(marker.read_bytes(), before)
+        self.run_labels()
+        value = _json_file(review)
+        value["rationale"] = "Changed review requires a new isolated revision"
+        self.write_json(review, value)
+        with self.assertRaisesRegex(ValueError, "already frozen"):
+            freeze_endpoint(self.root, *self.configs, review)
+        self.assertEqual((self.audit / "endpoint_decision.json").read_bytes(), frozen)
+
+    def test_supplementary_nonblocking_evidence_survives_formal_labels(self):
+        self.fixture.prepare()
+        self.fixture.run_audit()
+        old_outputs = self.fixture.outputs
+        self.fixture.cohort["burden_v2"]["supplementary_audit"] = dict(
+            baseline_outputs=str(old_outputs),
+            baseline_exclusions_path=str(
+                old_outputs / "audit/burden_v2/excluded_studies.csv"
+            ),
+            expected_scope_counts=[0, 0],
+        )
+        self.fixture.tables["chartevents"].append(
+            dict(
+                self.fixture.tables["chartevents"][0],
+                charttime=fixtures.dt(5),
+                warning="",
+            )
+        )
+        self.fixture.processed = self.root / "r02/processed"
+        self.fixture.outputs = self.root / "r02/outputs"
+        self.fixture.paths.update(
+            processed=str(self.fixture.processed), outputs=str(self.fixture.outputs)
+        )
+        self.data = self.fixture.processed / "cohort/burden_v2"
+        self.audit = self.fixture.outputs / "audit/burden_v2"
+        self.fixture.prepare()
+        self.fixture.run_audit()
+        review = self.endpoint_review()
+        freeze_endpoint(self.root, *self.configs, review)
+        self.run_labels()
+        records = pq.read_table(self.data / "event_evidence.parquet").to_pylist()
+        unknown = [r for r in records if r["qualifies"] is None]
+        self.assertTrue(unknown)
+        self.assertTrue(all(r["blocks_event"] == 0 for r in unknown))
+        value = _json_file(review)
+        value["source_manifest_sha256"] = "0" * 64
+        self.write_json(review, value)
+        with self.assertRaisesRegex(ValueError, "latest Step 05"):
+            freeze_endpoint(self.root, *self.configs, review)
 
     def rewrite(self, path, transform):
         table = pq.read_table(path)

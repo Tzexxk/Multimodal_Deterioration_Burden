@@ -58,8 +58,6 @@ def load_settings(path: Path) -> dict:
     settings = _json_file(path)
     required = {
         "algorithm_version": "lab_audit_review_v1",
-        "cohort_version": "burden_v2_h72_r01",
-        "split_version": "burden_v2_h72_r01_split_v1",
         "lookback_hours": 24,
         "reviewer": "ZE Xiaokang",
     }
@@ -70,6 +68,17 @@ def load_settings(path: Path) -> dict:
         raise ValueError(
             "Laboratory settings do not match the frozen research decisions"
         )
+    cohort_version = settings.get("cohort_version", "")
+    if (
+        not isinstance(cohort_version, str)
+        or not re.fullmatch(r"burden_v2_h72_r(?:0[1-9]|[1-9][0-9]+)", cohort_version)
+        or not isinstance(settings.get("split_version"), str)
+        or not re.fullmatch(
+            re.escape(cohort_version) + r"_split_v[1-9][0-9]*",
+            settings["split_version"],
+        )
+    ):
+        raise ValueError("Laboratory cohort and split versions must agree")
     if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", settings.get("audit_version", "")):
         raise ValueError("Invalid laboratory audit version")
     for name, limit in (
@@ -473,7 +482,12 @@ def run_step10(
     paths = _json_file(configs[0])
     raw = _resolve_config_path(paths["mimic_iv"], root, raw=True)
     sources = {k: _under_root(raw, v) for k, v in settings["tables"].items()}
-    cache = processed / "../cache/burden_v2/labs" / settings["audit_version"]
+    cache_root = (
+        _resolve_config_path(paths["cache"], root, raw=False)
+        if paths.get("cache")
+        else processed.parent / "cache"
+    )
+    cache = cache_root / "burden_v2/labs" / settings["audit_version"]
     cache = cache.resolve()
     directory = outputs / "audit/burden_v2/labs" / settings["audit_version"]
     _protect_outputs(paths, root, processed, outputs, cache)

@@ -5,11 +5,13 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import re
+import shutil
 import tempfile
 from collections import defaultdict
 from collections.abc import Sequence
 from contextlib import ExitStack
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -19,6 +21,7 @@ from src.cohort.build_candidates import (
     OBSERVATION_COLUMNS,
     active_intervals,
     build_candidate,
+    deduplicate,
     observation,
     prepare_intervals,
 )
@@ -26,12 +29,14 @@ from src.cohort.burden_events import (
     EVENT_COLUMNS,
     EVIDENCE_COLUMNS,
     aggregate_medications,
+    classify_uncertainty,
     evaluate,
     infusion_evidence,
     ventilation_episodes,
 )
 from src.cohort.burden_io import (
     COMPONENTS,
+    SUPPLEMENTARY_COLUMNS,
     TABLE_COLUMNS,
     ParquetSink,
     clinical_time,
@@ -62,6 +67,16 @@ from src.cohort.common import (
 WIDE_COLUMNS = list(dict.fromkeys(OBSERVATION_COLUMNS + EVENT_COLUMNS))
 CONFLICT_POLICY = "non_icu_transfer_with_active_icustay"
 IDENTITY_POLICY = "candidate_medication_identity_policy"
+REVIEW_PATHS = {
+    "cohort_decisions_path": "cohort_decisions_sha256",
+    "event_decisions_path": "event_decisions_sha256",
+}
+SUPPLEMENTARY_REASONS = {
+    "Medication identity cannot be uniquely confirmed",
+    "Pre-admission medication record with unresolved identity",
+    "Invasive ventilation evidence or onset cannot be verified",
+    "Conflicting care-unit sources at t0",
+}
 IDENTITY_EXCLUSION_COLUMNS = (
     EVIDENCE_COLUMNS
     + (
@@ -251,6 +266,683 @@ def validate_rules(cohort: dict, ehr: dict, imaging: dict) -> dict:
     return rules
 
 
+def save_audit_snapshot(outputs: Path, destination: Path | None = None) -> Path:
+    """Preserve the original manifest bytes; snapshots never bind a later audit."""
+    _verify_run(outputs, 5)
+    manifest = outputs / "audit/step_05_manifest.json"
+    record = _json_file(manifest)
+    target_outputs = destination or outputs
+    base = target_outputs / "audit/burden_v2/review_snapshots" / record["run_id"]
+    index = base / "snapshot.json"
+    if index.exists():
+        value = _json_file(index)
+        if value["source_manifest_sha256"] != _file_hash(manifest):
+            raise ValueError("Immutable review snapshot manifest changed")
+        verify_snapshot(index)
+        return index
+    sources = {**record["files"], str(manifest.resolve()): _file_hash(manifest)}
+    with _OutputRun(target_outputs, 5, publish_manifest=False) as run:
+        files = {}
+        for number, (name, digest) in enumerate(sorted(sources.items())):
+            source = Path(name)
+            if _file_hash(source) != digest:
+                raise ValueError("Review snapshot source changed")
+            target = base / f"{number:03d}_{source.name}"
+            shutil.copy2(source, run.path(target))
+            if _file_hash(run.files[target.resolve()]) != digest:
+                raise ValueError("Review snapshot copy changed")
+            files[name] = {"path": str(target.resolve()), "sha256": digest}
+        run.path(index).write_text(
+            json.dumps(
+                {
+                    "run_id": record["run_id"],
+                    "source_manifest_sha256": _file_hash(manifest),
+                    "files": files,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        _verify_run(outputs, 5)
+    return index
+
+
+def verify_snapshot(index: Path) -> dict:
+    snapshot = _json_file(index)
+    if not re.fullmatch(r"[a-f0-9]{32}", snapshot.get("run_id", "")):
+        raise ValueError("Invalid review snapshot run ID")
+    if not snapshot.get("files"):
+        raise ValueError("Empty review snapshot")
+    manifest = None
+    for original, value in snapshot["files"].items():
+        path = Path(value["path"])
+        if not path.resolve().is_relative_to(index.parent.resolve()):
+            raise ValueError("Review snapshot path escaped its directory")
+        if _file_hash(path) != value["sha256"]:
+            raise ValueError("Review snapshot evidence changed")
+        if Path(original).name == "step_05_manifest.json":
+            manifest = _json_file(path)
+            if value["sha256"] != snapshot["source_manifest_sha256"]:
+                raise ValueError("Review snapshot manifest checksum mismatch")
+    if not manifest or manifest["run_id"] != snapshot["run_id"]:
+        raise ValueError("Review snapshot run mismatch")
+    expected = {
+        p: v["sha256"]
+        for p, v in snapshot["files"].items()
+        if Path(p).name != "step_05_manifest.json"
+    }
+    if manifest["files"] != expected:
+        raise ValueError("Review snapshot does not cover its original manifest")
+    return snapshot
+
+
+def review_identity(row: dict, event: bool, include_version: bool = True) -> tuple:
+    target = (row["sample_id"],)
+    if event:
+        scope = row.get("override_scope") or "component"
+        target += (identifier(row["horizon_hours"]), row["component"], scope)
+        if scope == "source_record":
+            target += (tuple(sorted(json.loads(row["source_record_keys"]))),)
+    else:
+        target += (row["reason"],)
+    return ((row["version"],) + target) if include_version else target
+
+
+def load_review_decisions(
+    path: Path | None,
+    samples: set[str],
+    event: bool,
+    legacy: list[dict],
+    check: dict | None = None,
+) -> list[dict]:
+    rows = []
+    for old in legacy:
+        rows.append(
+            {
+                **old,
+                "decision": (
+                    "exclude_source"
+                    if event and old.get("override_scope") == "source_record"
+                    else "set_event"
+                    if event
+                    else "exclude"
+                ),
+                "legacy_review": True,
+            }
+        )
+    if path:
+        with path.open(encoding="utf-8-sig", newline="") as stream:
+            reader = _csv_reader(stream, check)
+            required = {
+                "sample_id",
+                "source_record_keys",
+                "reviewer",
+                "rationale",
+                "version",
+                "decision",
+                "reviewed_on",
+                "source_run_id",
+                "source_manifest_sha256",
+                "supersedes",
+            }
+            required |= (
+                {
+                    "horizon_hours",
+                    "component",
+                    "event_flag",
+                    "first_event_time",
+                    "override_scope",
+                }
+                if event
+                else {"reason"}
+            )
+            if (
+                not reader.fieldnames
+                or required - set(reader.fieldnames)
+                or len(reader.fieldnames) != len(set(reader.fieldnames))
+            ):
+                raise ValueError("Incomplete difficult-sample decision CSV")
+            for row in reader:
+                allowed = (
+                    {"pending", "set_event", "exclude_source"}
+                    if event
+                    else {"pending", "resolve_blocker", "exclude"}
+                )
+                if row["sample_id"] not in samples or row["decision"] not in allowed:
+                    raise ValueError("Invalid difficult-sample decision target")
+                keys = json.loads(row["source_record_keys"] or "[]")
+                if (
+                    not isinstance(keys, list)
+                    or any(not isinstance(k, str) or not k.strip() for k in keys)
+                    or len(keys) != len(set(keys))
+                ):
+                    raise ValueError("Invalid difficult-sample source key array")
+                if event:
+                    if (
+                        row["component"] not in COMPONENTS
+                        or identifier(row["horizon_hours"]) not in (48, 72)
+                        or row["override_scope"] not in {"component", "source_record"}
+                    ):
+                        raise ValueError("Invalid difficult-sample event scope")
+                    if row["decision"] == "pending" and (
+                        row["event_flag"] or row["first_event_time"]
+                    ):
+                        raise ValueError(
+                            "Pending event decisions must leave labels blank"
+                        )
+                    if row["decision"] == "set_event" and (
+                        row["event_flag"] not in {"0", "1"}
+                        or row["override_scope"] != "component"
+                    ):
+                        raise ValueError(
+                            "set_event requires a binary component decision"
+                        )
+                    if row["decision"] == "set_event" and (
+                        (row["event_flag"] == "0" and row["first_event_time"])
+                        or (
+                            row["event_flag"] == "1"
+                            and not clinical_time(row["first_event_time"])
+                        )
+                    ):
+                        raise ValueError(
+                            "Event time must agree with the binary decision"
+                        )
+                    if row["decision"] == "exclude_source":
+                        if (
+                            row["event_flag"] not in {"", "0"}
+                            or row["first_event_time"]
+                            or row["override_scope"] != "source_record"
+                        ):
+                            raise ValueError("exclude_source is not a component label")
+                        row["event_flag"] = "0"
+                elif not row["reason"].strip():
+                    raise ValueError("Cohort decision requires a specific blocker")
+                if row["decision"] != "pending":
+                    if not keys or any(
+                        not row[k].strip()
+                        for k in (
+                            "reviewer",
+                            "rationale",
+                            "version",
+                            "reviewed_on",
+                            "source_run_id",
+                            "source_manifest_sha256",
+                        )
+                    ):
+                        raise ValueError(
+                            "Final decisions require complete review provenance"
+                        )
+                    datetime.strptime(row["reviewed_on"], "%Y-%m-%d")
+                    if not re.fullmatch(
+                        r"[a-f0-9]{32}", row["source_run_id"]
+                    ) or not re.fullmatch(
+                        r"[a-f0-9]{64}", row["source_manifest_sha256"]
+                    ):
+                        raise ValueError("Invalid decision audit binding")
+                elif row["supersedes"]:
+                    raise ValueError(
+                        "Pending decisions cannot supersede final decisions"
+                    )
+                rows.append(row)
+    final = [r for r in rows if r["decision"] != "pending"]
+    indexed = {}
+    for row in final:
+        key = review_identity(row, event)
+        if key in indexed:
+            raise ValueError("Duplicate versioned review decision")
+        indexed[key] = row
+    removed, edges = set(), {}
+    for key, row in indexed.items():
+        refs = json.loads(row.get("supersedes") or "[]")
+        if not isinstance(refs, list):
+            raise ValueError("supersedes must be a JSON array of decision references")
+        edges[key] = []
+        for ref in refs:
+            if not isinstance(ref, dict):
+                raise ValueError("Invalid supersedes reference")
+            old = review_identity(ref, event)
+            end = 4 if event else 3
+            if old not in indexed or old in removed or old[1:end] != key[1:end]:
+                raise ValueError("Missing, branching or unrelated supersedes reference")
+            removed.add(old)
+            edges[key].append(old)
+
+    def visit(key, ancestors):
+        if key in ancestors:
+            raise ValueError("Cyclic decision supersession")
+        for old in edges[key]:
+            visit(old, ancestors | {key})
+
+    for key in edges:
+        visit(key, set())
+    active = [r for k, r in indexed.items() if k not in removed]
+    targets = set()
+    for row in active:
+        target = review_identity(row, event, False)
+        if target in targets:
+            raise ValueError("Conflicting active review decisions require supersedes")
+        targets.add(target)
+    if event:
+        for row in active:
+            peers = [
+                r
+                for r in active
+                if r is not row
+                and review_identity(r, True, False)[:3]
+                == review_identity(row, True, False)[:3]
+            ]
+            if peers and (
+                (row.get("override_scope") or "component") == "component"
+                or any(
+                    set(json.loads(row["source_record_keys"]))
+                    & set(json.loads(r["source_record_keys"]))
+                    for r in peers
+                )
+            ):
+                raise ValueError("Overlapping active event decisions")
+    return active
+
+
+def raw_source_index(values: list[dict]) -> dict:
+    result = {}
+
+    def collect(value, owner=None):
+        if isinstance(value, dict):
+            owner = value.get("hadm_id") or owner
+            key = value.get("source_record_key")
+            if key:
+                table = key.split(":", 1)[0]
+                fields = TABLE_COLUMNS.get(table, "").split()
+                if table == "ventilation_episode":
+                    fields = [
+                        "subject_id",
+                        "hadm_id",
+                        "source_record_keys",
+                        "start",
+                        "end",
+                    ]
+                if fields:
+                    from src.cohort.burden_io import SUPPLEMENTARY_COLUMNS
+
+                    fields += [
+                        f
+                        for f in SUPPLEMENTARY_COLUMNS.get(table, "").split()
+                        if f in value
+                    ]
+                    raw = {
+                        f: str(value.get(f)) if f in {"start", "end"} else value.get(f)
+                        for f in fields
+                    }
+                    result[key] = {
+                        "content": record_key(table, raw),
+                        "subject_id": identifier(value.get("subject_id")),
+                        "hadm_id": identifier(owner),
+                    }
+            for nested in value.values():
+                if isinstance(nested, (list, dict)):
+                    collect(nested, owner)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested, owner)
+
+    collect(values)
+    return result
+
+
+def validate_review_binding(
+    row: dict,
+    candidate: dict,
+    context: dict,
+    outputs: Path,
+    input_versions: dict,
+    rules: dict,
+) -> Path:
+    index = (
+        outputs
+        / "audit/burden_v2/review_snapshots"
+        / row["source_run_id"]
+        / "snapshot.json"
+    )
+    snapshot = verify_snapshot(index)
+    if snapshot["source_manifest_sha256"] != row["source_manifest_sha256"]:
+        raise ValueError("Decision references a stale source manifest")
+    saved, original = [], None
+    for name, entry in snapshot["files"].items():
+        basename = Path(name).name
+        if basename == "run_metadata.json":
+            from src.cohort import build_labels
+
+            metadata = _json_file(Path(entry["path"]))
+            if metadata["input_versions"] != input_versions:
+                raise ValueError("Decision raw source versions changed; review again")
+            dictionary = {
+                name: rules[name]
+                for name in (*MAPPING_ACTIONS, "medications", "spo2_units", "items")
+            }
+            if (
+                metadata["dictionary_sha256"] != build_labels._json_hash(dictionary)
+                or metadata["code_sha256"] != build_labels._audit_code_hash()
+                or any(
+                    metadata[name] != rules[name]
+                    for name in ("rules_version", "dictionary_version")
+                )
+            ):
+                raise ValueError(
+                    "Decision rules, dictionary or audit code changed; review again"
+                )
+        elif basename == "candidate_studies.parquet":
+            values = pq.read_table(
+                entry["path"], filters=[("sample_id", "=", candidate["sample_id"])]
+            ).to_pylist()
+            if len(values) != 1:
+                raise ValueError("Decision sample missing from source snapshot")
+            original = values[0]
+        elif basename in {
+            "candidate_evidence.parquet",
+            "event_evidence.parquet",
+            "supplementary_event_evidence.parquet",
+        }:
+            values = pq.read_table(
+                entry["path"], filters=[("sample_id", "=", candidate["sample_id"])]
+            ).to_pylist()
+            for value in values:
+                raw = json.loads(value["raw_evidence"])
+                if isinstance(raw, dict) and "source_record_key" not in raw:
+                    raw["source_record_key"] = value["source_record_key"]
+                saved.append(raw)
+        elif basename == "medication_identity_audit.parquet":
+            values = pq.read_table(
+                entry["path"],
+                filters=[
+                    ("subject_id", "=", candidate["subject_id"]),
+                    ("hadm_id", "=", candidate["hadm_id"]),
+                ],
+            ).to_pylist()
+            saved += [json.loads(v["raw_evidence"]) for v in values]
+    if original is None or any(
+        original[f] != candidate[f]
+        for f in ("subject_id", "hadm_id", "study_id", "t0", "admittime", "dischtime")
+    ):
+        raise ValueError("Decision patient, admission or window changed")
+    if row["decision"] == "resolve_blocker" and row["reason"] not in original[
+        "exclusion_reason"
+    ].split(";"):
+        raise ValueError("Decision does not resolve a blocker in its source audit")
+    if row["decision"] == "set_event" and row["event_flag"] == "1":
+        time = clinical_time(row["first_event_time"])
+        t0, discharge = candidate["t0"], candidate["dischtime"]
+        end = min(t0 + timedelta(hours=identifier(row["horizon_hours"])), discharge)
+        if time is None or not t0 < time <= end:
+            raise ValueError("Decision event time is outside its observation window")
+    current = [
+        *context["transfers"],
+        *context["stays"],
+        *context["medication_events"],
+        *context["ventilation_episodes"],
+        *context["ventilation_rejected"],
+        *context["chartevents"],
+        *context["procedureevents"],
+        {
+            **context["admission"],
+            "source_record_key": record_key("admissions", context["admission"]),
+        },
+    ]
+    for table in ("chartevents", "procedureevents"):
+        current += [
+            {**v, "source_record_key": record_key(table, v)} for v in context[table]
+        ]
+    old, new = raw_source_index(saved), raw_source_index(current)
+    for key in json.loads(row["source_record_keys"]):
+        if (
+            key not in old
+            or key not in new
+            or old[key] != new[key]
+            or (
+                new[key]["subject_id"] != candidate["subject_id"]
+                or new[key]["hadm_id"] != candidate["hadm_id"]
+            )
+        ):
+            raise ValueError(
+                "Decision evidence changed or belongs to another admission"
+            )
+    return index
+
+
+def freeze_endpoint(
+    root: Path,
+    paths_file: Path,
+    cohort_file: Path,
+    ehr_file: Path,
+    imaging_file: Path,
+    review_file: Path,
+) -> int:
+    """Freeze a reviewed current audit without changing its source manifest."""
+    from src.cohort import build_labels
+
+    configs = [paths_file, cohort_file, ehr_file, imaging_file]
+    paths, cohort, ehr, imaging = map(_json_file, configs)
+    rules = validate_rules(cohort, ehr, imaging)
+    processed = _resolve_config_path(paths["processed"], root, raw=False)
+    outputs = _resolve_config_path(paths["outputs"], root, raw=False)
+    _protect_outputs(paths, root, processed, outputs)
+    review = _json_file(review_file)
+    required = {
+        "decision_version",
+        "reviewer",
+        "reviewed_on",
+        "rationale",
+        "rules_revision",
+        "source_run_id",
+        "source_manifest_sha256",
+    }
+    if (
+        review.get("confirmed") is not True
+        or any(
+            not isinstance(review.get(k), str) or not review[k].strip()
+            for k in required
+        )
+        or review.get("horizon_hours") != 72
+        or type(review.get("horizon_hours")) is not int
+    ):
+        raise ValueError(
+            "Endpoint freeze requires an explicit reviewed 72-hour decision"
+        )
+    datetime.strptime(review["reviewed_on"], "%Y-%m-%d")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", review["decision_version"]):
+        raise ValueError("Unsafe endpoint decision version")
+    refs = review.get("review_records")
+    if (
+        not isinstance(refs, list)
+        or not refs
+        or any(not isinstance(p, str) for p in refs)
+    ):
+        raise ValueError("Endpoint freeze requires reviewed record references")
+    review_hashes = {
+        review_file.resolve().relative_to(root).as_posix(): _file_hash(review_file)
+    }
+    for name in refs:
+        path = _resolve_config_path(name, root, raw=False)
+        review_hashes[path.relative_to(root).as_posix()] = _file_hash(path)
+    for step in (3, 4, 5):
+        _verify_run(outputs, step)
+    manifest_path = outputs / "audit/step_05_manifest.json"
+    audit_dir = outputs / "audit/burden_v2"
+    meta_path = audit_dir / "run_metadata.json"
+    meta = _json_file(meta_path)
+    if (
+        meta["run_id"] != review["source_run_id"]
+        or _file_hash(manifest_path) != review["source_manifest_sha256"]
+    ):
+        raise ValueError("Endpoint review does not reference the latest Step 05 audit")
+    if not all(meta.get(k) is True for k in build_labels.READY_FLAGS):
+        raise ValueError(
+            "Audit still has unresolved labels, candidates or dictionary handling"
+        )
+    extras = []
+    for field, hash_field in (
+        ("overrides_path", "override_sha256"),
+        ("candidate_exclusions_path", "candidate_exclusions_sha256"),
+        *REVIEW_PATHS.items(),
+    ):
+        path = (
+            _resolve_config_path(rules[field], root, raw=False)
+            if rules.get(field)
+            else None
+        )
+        if (_file_hash(path) if path else None) != meta.get(hash_field):
+            raise ValueError("Audit decision input changed before freeze")
+        if path:
+            extras.append(path)
+    if (
+        _config_hash(configs + extras) != meta["config_sha256"]
+        or build_labels._audit_code_hash() != meta["code_sha256"]
+    ):
+        raise ValueError("Audit code or configuration changed before freeze")
+    iv = _resolve_config_path(paths["mimic_iv"], root, raw=True)
+    if any(
+        _file_version(_under_root(iv, p)) != meta["input_versions"][n]
+        for n, p in ehr["burden_v2"]["tables"].items()
+    ):
+        raise ValueError("Raw sources changed before endpoint freeze")
+    for name, digest in meta.get("review_snapshot_bindings", {}).items():
+        index = _under_root(root, name)
+        if _file_hash(index) != digest:
+            raise ValueError("Review snapshot binding changed before freeze")
+        verify_snapshot(index)
+    artifacts = {
+        "candidates": processed / "cohort/burden_v2/candidate_studies.parquet",
+        "candidate_evidence": processed / "cohort/burden_v2/candidate_evidence.parquet",
+        "observations": processed
+        / "cohort/burden_v2/window_72h/candidate_observation.parquet",
+        "wide": processed / "cohort/burden_v2/window_72h/study_event_audit.parquet",
+        "evidence": processed / "cohort/burden_v2/window_72h/event_evidence.parquet",
+    }
+    with tempfile.TemporaryDirectory(prefix=".freeze_05_", dir=outputs) as scratch:
+        connection = open_store(Path(scratch), ehr["burden_v2"]["memory_limit"])
+        try:
+            counts = build_labels.validate_labels(connection, artifacts, 72)
+        finally:
+            connection.close()
+    source = {
+        "run_id": meta["run_id"],
+        "manifest_path": manifest_path.relative_to(root).as_posix(),
+        "manifest_sha256": _file_hash(manifest_path),
+        "metadata_path": meta_path.relative_to(root).as_posix(),
+        "metadata_sha256": _file_hash(meta_path),
+        **{
+            k: meta[k]
+            for k in (
+                "config_sha256",
+                "code_sha256",
+                "input_versions",
+                "upstream",
+                "csv_tail_checks",
+                *build_labels.READY_FLAGS,
+            )
+        },
+    }
+    window_path = audit_dir / "window_decision.md"
+    decision_path = audit_dir / "endpoint_decision.json"
+    if decision_path.exists():
+        existing = _json_file(decision_path)
+        if (
+            existing.get("review_records_sha256") == review_hashes
+            and existing["source_audit"] == source
+        ):
+            build_labels.verify_frozen_inputs(root, configs)
+            print("Endpoint already frozen under the same reviewed evidence")
+            return 0
+        raise ValueError(
+            "An endpoint is already frozen here; use a new isolated revision"
+        )
+    text = (
+        "# Reviewed supplementary endpoint\n\n"
+        f"Reviewer: {review['reviewer']}\n\nReviewed on: {review['reviewed_on']}\n\n"
+        f"Rationale: {review['rationale']}\n\nRule revision: {review['rules_revision']}\n\n"
+        "H=72; window (t0, min(t0+72h, dischtime)]. All six events must be determined.\n"
+        "SpO2 <=85%; T=max(ICU,Stepdown); R=max(IMV,hypoxemia); S=T+2R+2C+3D.\n"
+        "Early 3-hour events remain included. Live discharge truncates observation.\n"
+    )
+    decision = {
+        "decision_version": review["decision_version"],
+        "decision_status": "frozen",
+        **{
+            k: review[k]
+            for k in ("reviewer", "reviewed_on", "rationale", "rules_revision")
+        },
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "outcome_version": "burden_v2",
+        "sample_unit": "study",
+        "horizon_hours": 72,
+        "ehr_lookback_hours": 24,
+        "event_window": "(t0, min(t0+H, dischtime)]",
+        "transfer_weight": 1,
+        "respiratory_weight": 2,
+        "circulatory_weight": 2,
+        "death_weight": 3,
+        "domain_capping": True,
+        "target_column": "burden_score",
+        "target_range": [0, 8],
+        "target_formula": "T + 2*R + 2*C + 3*D; T=max(icu,stepdown), R=max(imv,hypoxemia), C=infusion, D=death",
+        "phys_death_rule": "int(R == 1 or C == 1 or D == 1)",
+        "high_burden_threshold": 3,
+        "hypoxemia_source": "MIMIC-IV ICU chartevents only",
+        "hypoxemia_itemid": 220277,
+        "hypoxemia_threshold_percent": 85,
+        "early_3h_events_included": True,
+        "live_discharge_rule": "Retain events in (t0, dischtime] when alive discharge precedes t0+H; absent recorded events are operational zeros.",
+        "horizon_frozen": True,
+        "label_rules_frozen": True,
+        "formal_labels_published": False,
+        "common_cohort_frozen": False,
+        "source_audit": source,
+        **{
+            k: meta.get(k)
+            for k in (
+                "rules_version",
+                "dictionary_version",
+                "rules_config_sha256",
+                "dictionary_sha256",
+                "dictionary_handling_reviews_sha256",
+                "override_sha256",
+                "candidate_exclusions_sha256",
+                *REVIEW_PATHS.values(),
+            )
+        },
+        "review_snapshot_bindings": meta.get("review_snapshot_bindings", {}),
+        "baseline_reference_bindings": meta.get("baseline_reference_bindings", {}),
+        "review_records_sha256": review_hashes,
+        "selection_record": {
+            "path": review_file.relative_to(root).as_posix(),
+            "sha256": _file_hash(review_file),
+        },
+        "window_decision_path": window_path.relative_to(root).as_posix(),
+        "window_decision_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "selected_window_artifact_sha256": {
+            p.relative_to(root).as_posix(): _file_hash(p) for p in artifacts.values()
+        },
+        "window_comparison": {"72": counts},
+    }
+    with _OutputRun(outputs, 5, processed, publish_manifest=False) as run:
+        run.path(window_path).write_text(text, encoding="utf-8", newline="\n")
+        run.path(decision_path).write_text(
+            json.dumps(decision, indent=2) + "\n", encoding="utf-8"
+        )
+        build_labels.verify_frozen_inputs(
+            root,
+            configs,
+            decision_file=run.files[decision_path.resolve()],
+            window_file=run.files[window_path.resolve()],
+        )
+        _verify_run(outputs, 5)
+        if any(_file_hash(_under_root(root, p)) != h for p, h in review_hashes.items()):
+            raise ValueError("Endpoint review changed during publication")
+    build_labels.verify_frozen_inputs(root, configs)
+    print(f"Reviewed endpoint frozen: {decision_path}")
+    return 0
+
+
 def medication_identity_exclusion(
     candidate: dict, context: dict, rules: dict
 ) -> tuple[dict | None, list[dict]]:
@@ -258,13 +950,18 @@ def medication_identity_exclusion(
     policy = rules.get(IDENTITY_POLICY, {})
     if not policy.get("confirmed") or candidate["candidate_status"] != "eligible":
         return None, []
-    triggers = [
-        row
-        for horizon in (48, 72)
-        for row in infusion_evidence(observation(candidate, horizon), context)
-        if row["qualifies"] is None
-        and row["exclusion_reason"] == "unconfirmed_medication_name"
-    ]
+    triggers = []
+    for horizon in (48, 72):
+        study = observation(candidate, horizon)
+        records = infusion_evidence(study, context)
+        classify_uncertainty(study, records, bool(rules.get("supplementary_audit")))
+        triggers += [
+            row
+            for row in records
+            if row["qualifies"] is None
+            and row["blocks_event"]
+            and row["exclusion_reason"] == "unconfirmed_medication_name"
+        ]
     if not triggers:
         return None, []
     keys = sorted(
@@ -1044,7 +1741,7 @@ def reports(
     for component in COMPONENTS:
         inconsistent = connection.execute(
             "WITH decisions AS (SELECT sample_id,horizon_hours,"
-            "bool_or(qualifies IS NULL) pending,coalesce(max(qualifies),0) event_flag,"
+            "bool_or(qualifies IS NULL AND blocks_event=1) pending,coalesce(max(qualifies),0) event_flag,"
             "min(first_event_time) FILTER (WHERE qualifies=1) first_time FROM evidence "
             "WHERE component=? GROUP BY sample_id,horizon_hours) SELECT count(*) FROM wide w "
             "LEFT JOIN decisions d USING(sample_id,horizon_hours) WHERE candidate_status<>'excluded' "
@@ -1087,6 +1784,46 @@ def audit_burden_labels(
     processed = _resolve_config_path(paths["processed"], root, raw=False)
     outputs = _resolve_config_path(paths["outputs"], root, raw=False)
     _protect_outputs(paths, root, processed, outputs)
+    supplementary = rules.get("supplementary_audit", {})
+    baseline, review_scope = {}, set()
+    if supplementary:
+        baseline_path = _resolve_config_path(
+            supplementary["baseline_exclusions_path"], root, raw=False
+        )
+        with baseline_path.open(encoding="utf-8-sig", newline="") as stream:
+            baseline_rows = list(_csv_reader(stream))
+        baseline = {r["sample_id"]: r for r in baseline_rows}
+        if len(baseline) != len(baseline_rows):
+            raise ValueError("Duplicate baseline exclusion sample")
+        review_scope = {
+            k
+            for k, r in baseline.items()
+            if r["exclusion_reason"] in SUPPLEMENTARY_REASONS
+        }
+        if (len(review_scope), len(baseline) - len(review_scope)) != tuple(
+            supplementary.get("expected_scope_counts", [221, 841])
+        ):
+            raise ValueError("Supplementary scope must match the confirmed baseline")
+        source_outputs = _resolve_config_path(
+            supplementary["baseline_outputs"], root, raw=False
+        )
+        baseline_bindings = {
+            baseline_path.relative_to(root).as_posix(): _file_hash(baseline_path)
+        }
+        for field in (
+            "baseline_labels_path",
+            "baseline_split_path",
+            "baseline_image_manifest_path",
+            "baseline_acceptance_path",
+        ):
+            if supplementary.get(field):
+                path = _resolve_config_path(supplementary[field], root, raw=False)
+                baseline_bindings[path.relative_to(root).as_posix()] = _file_hash(path)
+        if source_outputs == outputs:
+            raise ValueError("Supplementary audit must use isolated output roots")
+        save_audit_snapshot(source_outputs, outputs)
+        if (outputs / "audit/step_05_manifest.json").exists():
+            save_audit_snapshot(outputs)
     config_files = [paths_file, cohort_file, ehr_file, imaging_file]
     override_path = (
         _resolve_config_path(rules["overrides_path"], root, raw=False)
@@ -1102,6 +1839,16 @@ def audit_burden_labels(
     )
     if candidate_exclusions_path:
         config_files.append(candidate_exclusions_path)
+    review_paths = {}
+    for field in REVIEW_PATHS:
+        path = (
+            _resolve_config_path(rules[field], root, raw=False)
+            if rules.get(field)
+            else None
+        )
+        review_paths[field] = path
+        if path:
+            config_files.append(path)
     config_hash = _config_hash(config_files)
     source_names = ehr["burden_v2"]["tables"]
     source_paths = {
@@ -1134,6 +1881,33 @@ def audit_burden_labels(
             if candidate_exclusions_path
             else None,
         )
+        cohort_decisions = load_review_decisions(
+            review_paths["cohort_decisions_path"],
+            sample_ids,
+            False,
+            list(candidate_exclusions.values()),
+            run.check_csv(review_paths["cohort_decisions_path"])
+            if review_paths["cohort_decisions_path"]
+            else None,
+        )
+        event_decisions = load_review_decisions(
+            review_paths["event_decisions_path"],
+            sample_ids,
+            True,
+            list(overrides.values()),
+            run.check_csv(review_paths["event_decisions_path"])
+            if review_paths["event_decisions_path"]
+            else None,
+        )
+        overrides = defaultdict(list)
+        for decision in event_decisions:
+            overrides[
+                decision["sample_id"],
+                identifier(decision["horizon_hours"]),
+                decision["component"],
+            ].append(decision)
+        snapshot_bindings = {}
+        scope_report, lineage = [], {}
         outputs.mkdir(parents=True, exist_ok=True)
         scratch = Path(
             stack.enter_context(
@@ -1142,7 +1916,14 @@ def audit_burden_labels(
         )
         connection = open_store(scratch, ehr["burden_v2"]["memory_limit"])
         stack.callback(connection.close)
-        ingest(connection, iv, ehr["burden_v2"], matches, run)
+        ingest(
+            connection,
+            iv,
+            ehr["burden_v2"],
+            matches,
+            run,
+            supplementary=bool(supplementary),
+        )
         for table, field in (
             ("admissions", "hadm_id"),
             ("patients", "subject_id"),
@@ -1202,6 +1983,17 @@ def audit_burden_labels(
         candidate_sink = sink(
             "candidates", data_dir / "candidate_studies.parquet", CANDIDATE_COLUMNS
         )
+        if supplementary:
+            sink(
+                "supplementary_wide",
+                data_dir / "supplementary_event_audit.parquet",
+                WIDE_COLUMNS,
+            )
+            sink(
+                "supplementary_evidence",
+                data_dir / "supplementary_event_evidence.parquet",
+                EVIDENCE_COLUMNS,
+            )
         candidate_evidence_sink = sink(
             "candidate_evidence",
             data_dir / "candidate_evidence.parquet",
@@ -1442,6 +2234,77 @@ def audit_burden_labels(
                         rules,
                         _under_root(cxr, selection["dicom_path"]).is_file(),
                     )
+                    diagnostic_candidate = dict(candidate)
+                    decisions = [
+                        r
+                        for r in cohort_decisions
+                        if r["sample_id"] == candidate["sample_id"]
+                    ]
+                    for decision in decisions + [
+                        r
+                        for r in event_decisions
+                        if r["sample_id"] == candidate["sample_id"]
+                    ]:
+                        if decision.get("legacy_review"):
+                            continue
+                        index = validate_review_binding(
+                            decision, candidate, context, outputs, versions, rules
+                        )
+                        snapshot_bindings[index.relative_to(root).as_posix()] = (
+                            _file_hash(index)
+                        )
+                    resolved = {
+                        r["reason"]
+                        for r in decisions
+                        if r["decision"] == "resolve_blocker"
+                    }
+                    if (
+                        resolved
+                        and candidate["sample_id"] in baseline
+                        and candidate["sample_id"] not in review_scope
+                    ):
+                        raise ValueError(
+                            "A decision attempts to reopen a protected baseline exclusion"
+                        )
+                    for decision in decisions:
+                        if decision["decision"] != "resolve_blocker":
+                            continue
+                        if decision["reason"] == "Conflicting care-unit sources at t0":
+                            level = decision.get("care_level_at_t0")
+                            if level not in {
+                                "ward",
+                                "stepdown_intermediate",
+                                "icu_ccu",
+                            }:
+                                raise ValueError(
+                                    "Care-unit resolution requires structured care_level_at_t0"
+                                )
+                            candidate["care_level_at_t0"] = level
+                            reasons = set(candidate["exclusion_reason"].split(";")) - {
+                                "",
+                                "transfers_icustays_conflict",
+                            }
+                            if level == "icu_ccu":
+                                reasons.add("icu_at_t0")
+                            candidate["exclusion_reason"] = ";".join(sorted(reasons))
+                            candidate["candidate_status"] = (
+                                "excluded"
+                                if "icu_at_t0" in reasons
+                                else "needs_review"
+                                if reasons
+                                else "eligible"
+                            )
+                            candidate["review_status"] = "reviewed"
+                    if (
+                        candidate["sample_id"] in baseline
+                        and candidate["sample_id"] not in review_scope
+                    ):
+                        candidate.update(
+                            candidate_status="excluded",
+                            exclusion_reason=baseline[candidate["sample_id"]][
+                                "exclusion_reason"
+                            ],
+                        )
                     candidate_sources = [
                         ("admissions", record_key("admissions", admission), admission),
                         ("patients", record_key("patients", patient), patient),
@@ -1454,12 +2317,33 @@ def audit_burden_labels(
                         ("icustays", row["source_record_key"], row)
                         for row in context["stays"]
                     ]
-                    exclusion = candidate_exclusions.get(candidate["sample_id"])
+                    exclusions = [r for r in decisions if r["decision"] == "exclude"]
+                    exclusion = exclusions[0] if exclusions else None
+                    if len(exclusions) > 1:
+                        exclusion = {
+                            **exclusion,
+                            "reason": ";".join(
+                                sorted({r["reason"] for r in exclusions})
+                            ),
+                            "source_record_keys": json.dumps(
+                                sorted(
+                                    {
+                                        k
+                                        for r in exclusions
+                                        for k in json.loads(r["source_record_keys"])
+                                    }
+                                )
+                            ),
+                        }
                     exclusion_source = candidate_exclusions_path
+                    if exclusion and not exclusion.get("legacy_review"):
+                        exclusion_source = review_paths["cohort_decisions_path"]
                     if not exclusion:
                         exclusion = candidate_conflict_exclusion(
                             candidate, context, rules
                         )
+                        if exclusion and exclusion["reason"] in resolved:
+                            exclusion = None
                         if exclusion:
                             exclusion_source = cohort_file
                             policy_exclusion_count += 1
@@ -1467,6 +2351,8 @@ def audit_burden_labels(
                         exclusion, triggers = medication_identity_exclusion(
                             candidate, context, rules
                         )
+                        if exclusion and exclusion["reason"] in resolved:
+                            exclusion = None
                         if exclusion:
                             exclusion_source = cohort_file
                             identity_exclusion_count += 1
@@ -1527,6 +2413,16 @@ def audit_burden_labels(
                             == candidate["subject_id"]
                             and identifier(raw.get("hadm_id")) == candidate["hadm_id"]
                         )
+                        candidate_sources.extend(
+                            (
+                                "icustays" if table == "stays" else table,
+                                raw["legacy_source_record_key"],
+                                raw,
+                            )
+                            for table in ("transfers", "stays")
+                            for raw in context[table]
+                            if raw.get("legacy_source_record_key") in cited
+                        )
                         for raw in context["medication_events"]:
                             if raw["reason"] == "other_admission" or identifier(
                                 raw.get("hadm_id")
@@ -1542,6 +2438,13 @@ def audit_burden_labels(
                                     (table, value["source_record_key"], value)
                                     for value in records
                                     if value["source_record_key"] in cited
+                                    and identifier(value.get("subject_id"))
+                                    == candidate["subject_id"]
+                                )
+                                candidate_sources.extend(
+                                    (table, value["legacy_source_record_key"], value)
+                                    for value in records
+                                    if value.get("legacy_source_record_key") in cited
                                     and identifier(value.get("subject_id"))
                                     == candidate["subject_id"]
                                 )
@@ -1623,8 +2526,61 @@ def audit_burden_labels(
                     for horizon in (48, 72):
                         study = observation(candidate, horizon)
                         values, evidence_rows = evaluate(
-                            study, context, rules, overrides
+                            study,
+                            context,
+                            rules,
+                            {}
+                            if supplementary and study["candidate_status"] == "excluded"
+                            else overrides,
                         )
+                        if supplementary and candidate["sample_id"] in review_scope:
+                            diagnostic = observation(
+                                candidate
+                                if candidate["candidate_status"] != "excluded"
+                                else diagnostic_candidate,
+                                horizon,
+                            )
+                            preview, preview_evidence = evaluate(
+                                diagnostic,
+                                context,
+                                rules,
+                                overrides
+                                if diagnostic["candidate_status"] == "eligible"
+                                else {},
+                            )
+                            sinks["supplementary_wide"].write(
+                                [{**diagnostic, **preview}]
+                            )
+                            sinks["supplementary_evidence"].write(preview_evidence)
+                        if (
+                            supplementary
+                            and horizon == 72
+                            and candidate["sample_id"] in baseline
+                        ):
+                            scope_report.append(
+                                {
+                                    "sample_id": candidate["sample_id"],
+                                    "baseline_reason": baseline[candidate["sample_id"]][
+                                        "exclusion_reason"
+                                    ],
+                                    "in_review_scope": int(
+                                        candidate["sample_id"] in review_scope
+                                    ),
+                                    "disposition": "protected_exclusion"
+                                    if candidate["sample_id"] not in review_scope
+                                    else "restored"
+                                    if values["label_status"] == "complete"
+                                    else "still_excluded"
+                                    if any(
+                                        not r.get("legacy_review")
+                                        and r["decision"] == "exclude"
+                                        for r in decisions
+                                    )
+                                    else "pending",
+                                    "current_reason": candidate["exclusion_reason"],
+                                    "label_status": values["label_status"],
+                                }
+                            )
                         consumed_overrides |= {
                             (study["sample_id"], horizon, component)
                             for component in COMPONENTS
@@ -1644,6 +2600,42 @@ def audit_burden_labels(
                     progress.update(1)
         if consumed_overrides != set(overrides):
             raise ValueError("Unused override targets")
+        if supplementary:
+            if {r["sample_id"] for r in scope_report} != set(baseline):
+                raise ValueError("Baseline exclusion coverage changed")
+            _write_csv(
+                run.path(audit_dir / "supplementary_scope.csv"),
+                [
+                    "sample_id",
+                    "baseline_reason",
+                    "in_review_scope",
+                    "disposition",
+                    "current_reason",
+                    "label_status",
+                ],
+                scope_report,
+            )
+            for table in SUPPLEMENTARY_COLUMNS:
+                for raw in deduplicate(table, rows(connection, table)):
+                    if raw.get("legacy_source_record_key"):
+                        lineage[raw["source_record_key"]] = {
+                            "source_table": table,
+                            "source_record_key": raw["source_record_key"],
+                            "legacy_source_record_key": raw["legacy_source_record_key"],
+                            "subject_id": raw.get("subject_id"),
+                            "hadm_id": raw.get("hadm_id", ""),
+                        }
+            _write_csv(
+                run.path(audit_dir / "source_key_lineage.csv"),
+                [
+                    "source_table",
+                    "source_record_key",
+                    "legacy_source_record_key",
+                    "subject_id",
+                    "hadm_id",
+                ],
+                list(lineage.values()),
+            )
         for value in sinks.values():
             value.close()
         identity_exclusions_stream.flush()
@@ -1725,7 +2717,9 @@ def audit_burden_labels(
                 for row in summary["candidate_counts"]
             )
             and handling_confirmed
-            and not summary["unresolved_evidence_count"]
+            and not connection.execute(
+                "SELECT count(*) FROM wide WHERE candidate_status='eligible' AND label_status<>'complete'"
+            ).fetchone()[0]
             and not any(
                 row["candidate_status"] == "needs_review"
                 for row in summary["candidate_counts"]
@@ -1792,6 +2786,21 @@ def audit_burden_labels(
             "upstream": upstream,
             "override_sha256": _file_hash(override_path) if override_path else None,
             "override_count": len(overrides),
+            **{
+                hash_field: _file_hash(review_paths[field])
+                if review_paths[field]
+                else None
+                for field, hash_field in REVIEW_PATHS.items()
+            },
+            "review_snapshot_bindings": snapshot_bindings,
+            "baseline_reference_bindings": baseline_bindings if supplementary else {},
+            "supplementary_scope": {
+                "review_studies": len(review_scope),
+                "protected_studies": len(baseline) - len(review_scope),
+                "baseline_exclusions_sha256": _file_hash(baseline_path)
+                if supplementary
+                else None,
+            },
             "candidate_exclusions_path": str(candidate_exclusions_path)
             if candidate_exclusions_path
             else None,
@@ -1857,6 +2866,8 @@ def audit_burden_labels(
             json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
         )
     print(f"V2 audit complete: {len(matches)} unique-match studies; H=48 and 72 hours")
+    if supplementary:
+        save_audit_snapshot(outputs)
     print(f"Reports: {audit_dir}")
     print(
         "H remains unfrozen. Review dictionary_inventory.csv, conflicts and run_metadata.json before Step 06."

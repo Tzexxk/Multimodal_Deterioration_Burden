@@ -311,6 +311,20 @@ class Step10BTests(unittest.TestCase):
         ):
             return step.run_step10b(self.root, self.args)
 
+    def test_explicit_cache_root_is_not_parent_cache(self):
+        paths = json.loads(self.paths.read_text())
+        cache = self.processed / "supplementary_r02/cache"
+        paths["cache"] = str(cache)
+        self.paths.write_text(json.dumps(paths))
+        self.run_mode()
+        record = json.loads(
+            (
+                self.output / "audit/burden_v2/ehr/ehr_audit_v1/ehr_audit_manifest.json"
+            ).read_text()
+        )
+        self.assertTrue(Path(record["cache_table"]).is_relative_to(cache))
+        self.assertFalse((self.processed.parent / "cache").exists())
+
     def test_boundaries_units_and_overlapping_windows(self):
         self.labs.extend(
             [

@@ -756,7 +756,12 @@ def run_step10b(root: Path, args) -> int:
         },
     }
     directory = outputs / "audit/burden_v2/ehr" / settings["audit_version"]
-    cache = (processed / "../cache/burden_v2/ehr" / settings["audit_version"]).resolve()
+    cache_root = (
+        _resolve_config_path(paths["cache"], root, raw=False)
+        if paths.get("cache")
+        else processed.parent / "cache"
+    )
+    cache = (cache_root / "burden_v2/ehr" / settings["audit_version"]).resolve()
     namespace = outputs / "step_10b" / args.mode
     _protect_outputs(paths, root, processed, outputs, cache)
     for path in [

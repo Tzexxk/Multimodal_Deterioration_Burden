@@ -52,6 +52,13 @@ TABLE_COLUMNS = {
     "prescriptions": "subject_id hadm_id pharmacy_id poe_id poe_seq starttime stoptime "
     "drug_type drug route",
 }
+SUPPLEMENTARY_COLUMNS = {
+    "icustays": "first_careunit last_careunit",
+    "emar_detail": "pharmacy_id product_code product_description "
+    "product_description_other infusion_rate_unit dose_given_unit",
+    "prescriptions": "formulary_drug_cd gsn ndc prod_strength form_rx "
+    "dose_val_rx dose_unit_rx form_val_disp form_unit_disp",
+}
 
 
 def clinical_time(value: Any) -> datetime | None:
@@ -128,6 +135,7 @@ def ingest(
     settings: dict,
     matches: list[dict],
     run: _OutputRun | None = None,
+    supplementary: bool = False,
 ) -> dict:
     """Project CSVs into disk tables; keep complete candidate-admission history."""
     connection.register(
@@ -152,6 +160,8 @@ def ingest(
         with path.open(encoding="utf-8-sig", newline="") as stream:
             header = next(csv.reader(stream), [])
         required = columns.split()
+        if supplementary:
+            required += SUPPLEMENTARY_COLUMNS.get(name, "").split()
         if len(header) != len(set(header)) or set(required) - set(header):
             raise ValueError(f"Missing or duplicate V2 columns in {name}")
         paths[name] = path
@@ -159,6 +169,14 @@ def ingest(
             condition = "true"
         elif name == "emar_detail":
             condition = "EXISTS (SELECT 1 FROM emar e WHERE e.emar_id = r.emar_id)"
+        elif name in {"pharmacy", "prescriptions"} and supplementary:
+            condition = (
+                "EXISTS (SELECT 1 FROM emar e WHERE "
+                "trim(e.subject_id)=trim(r.subject_id) AND "
+                "trim(e.hadm_id)=trim(r.hadm_id) AND "
+                "trim(e.pharmacy_id)=trim(r.pharmacy_id) AND "
+                "coalesce(trim(e.pharmacy_id),'')<>'')"
+            )
         elif name in {"pharmacy", "prescriptions"}:
             condition = (
                 "EXISTS (SELECT 1 FROM emar e WHERE coalesce(trim(e.medication),'')='' "
@@ -288,6 +306,8 @@ def schema_for(columns: Sequence[str]) -> pa.Schema:
                 "qualifies",
                 "automated_qualifies",
                 "event_flag",
+                "blocks_event",
+                "possible_earlier_event",
             }
         ):
             dtype = pa.uint8()

@@ -5,7 +5,13 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
-from src.cohort.burden_io import clinical_time, confirmed, identifier, record_key
+from src.cohort.burden_io import (
+    SUPPLEMENTARY_COLUMNS,
+    clinical_time,
+    confirmed,
+    identifier,
+    record_key,
+)
 
 CANDIDATE_COLUMNS = (
     "sample_id subject_id hadm_id study_id dicom_id dicom_path view_position "
@@ -29,6 +35,11 @@ def deduplicate(table: str, values: list[dict]) -> list[dict]:
         key = record_key(table, value)
         if key not in grouped:
             grouped[key] = {**value, "source_record_key": key, "duplicate_count": 0}
+            extra = set(SUPPLEMENTARY_COLUMNS.get(table, "").split())
+            if extra.intersection(value):
+                grouped[key]["legacy_source_record_key"] = record_key(
+                    table, {k: v for k, v in value.items() if k not in extra}
+                )
         grouped[key]["duplicate_count"] += 1
     return sorted(grouped.values(), key=lambda row: row["source_record_key"])
 

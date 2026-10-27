@@ -523,13 +523,16 @@ class _OutputRun:
     """Stage files, then publish with a rollback journal and a completion marker."""
 
     # ponytail: one writer per step; add locking if concurrent runs are required.
-    def __init__(self, outputs: Path, step: int, *roots: Path) -> None:
+    def __init__(
+        self, outputs: Path, step: int, *roots: Path, publish_manifest: bool = True
+    ) -> None:
         self.manifest, self.pending = _run_paths(outputs, step)
         self.prefix = f".step_{step:02d}_"
         self.roots = tuple(path.resolve() for path in (outputs, *roots))
         self.step = step
         self.run_id = uuid4().hex
         self.status = "complete"
+        self.publish_manifest = publish_manifest
         self.files: dict[Path, Path] = {}
         self.csv_checks: dict[Path, dict] = {}
 
@@ -619,19 +622,20 @@ class _OutputRun:
 
     def _publish(self) -> None:
         files = {str(path): _file_hash(temp) for path, temp in self.files.items()}
-        self.path(self.manifest).write_text(
-            json.dumps(
-                {
-                    "step": self.step,
-                    "run_id": self.run_id,
-                    "status": self.status,
-                    "files": files,
-                },
-                indent=2,
+        if self.publish_manifest:
+            self.path(self.manifest).write_text(
+                json.dumps(
+                    {
+                        "step": self.step,
+                        "run_id": self.run_id,
+                        "status": self.status,
+                        "files": files,
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
             )
-            + "\n",
-            encoding="utf-8",
-        )
         entries: list[dict[str, Any]] = []
         try:
             for target, temp in self.files.items():
@@ -668,7 +672,8 @@ class _OutputRun:
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         try:
             if exc_type is None and self.files:
-                self.write_csv_tail_report()
+                if self.publish_manifest:
+                    self.write_csv_tail_report()
                 self._publish()
         finally:
             for temp in self.files.values():

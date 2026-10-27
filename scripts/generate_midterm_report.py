@@ -21,10 +21,6 @@ import numpy as np
 import pandas as pd
 from matplotlib.patches import FancyBboxPatch
 
-RELEASE = "burden_v2_h72_r01"
-PACKAGE = f"data/processed/training/{RELEASE}"
-AUDIT = "outputs/audit/burden_v2"
-EHR_AUDIT = f"{AUDIT}/ehr/ehr_audit_v1"
 COMPONENTS = {
     "new_icu_ccu_transfer": "New ICU/CCU transfer",
     "new_stepdown_transfer": "New stepdown transfer",
@@ -75,6 +71,17 @@ def label_tables(samples: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
                 patient_denominator=samples.subject_id.nunique(),
             )
         )
+    positive = samples.loc[samples.burden_score > 0]
+    events.append(
+        dict(
+            component="nonzero_score",
+            label="Nonzero burden score",
+            studies=len(positive),
+            patients=positive.subject_id.nunique(),
+            study_denominator=len(samples),
+            patient_denominator=samples.subject_id.nunique(),
+        )
+    )
     return scores, pd.DataFrame(events)
 
 
@@ -101,6 +108,127 @@ def split_table(samples: pd.DataFrame) -> pd.DataFrame:
             )
         )
     return pd.DataFrame(rows)
+
+
+def supplementary_tables(
+    baseline: pd.DataFrame, samples: pd.DataFrame, scope: pd.DataFrame
+) -> dict[str, pd.DataFrame]:
+    """Aggregate changes without exporting patient identifiers or summing caps."""
+    if baseline.sample_id.duplicated().any() or scope.sample_id.duplicated().any():
+        raise ValueError("Duplicate supplementary comparison keys")
+    scope = scope.copy()
+    scope["final_included"] = scope.sample_id.isin(samples.sample_id)
+    protected = scope.loc[scope.in_review_scope == 0]
+    if (
+        protected.final_included.any()
+        or not protected.disposition.eq("protected_exclusion").all()
+    ):
+        raise ValueError("Protected baseline exclusions were reopened")
+    coverage = (
+        scope.groupby(
+            ["baseline_reason", "in_review_scope", "disposition", "final_included"],
+            dropna=False,
+        )
+        .size()
+        .rename("studies")
+        .reset_index()
+    )
+    joined = baseline.merge(
+        samples,
+        on="sample_id",
+        how="inner",
+        suffixes=("_old", "_new"),
+        validate="one_to_one",
+    )
+    old_keys, new_keys = set(baseline.sample_id), set(samples.sample_id)
+    new_studies = samples.loc[~samples.sample_id.isin(old_keys)]
+    new_patients = set(samples.subject_id) - set(baseline.subject_id)
+    summary = {
+        "baseline_studies": len(baseline),
+        "baseline_patients": baseline.subject_id.nunique(),
+        "final_studies": len(samples),
+        "final_patients": samples.subject_id.nunique(),
+        "added_studies": len(new_studies),
+        "added_admissions": len(set(samples.hadm_id) - set(baseline.hadm_id)),
+        "added_independent_patients": len(new_patients),
+        "new_independent_nonzero_patients": len(
+            set(samples.loc[samples.burden_score.gt(0), "subject_id"])
+            - set(baseline.loc[baseline.burden_score.gt(0), "subject_id"])
+        ),
+        "lost_independent_nonzero_patients": len(
+            set(baseline.loc[baseline.burden_score.gt(0), "subject_id"])
+            - set(samples.loc[samples.burden_score.gt(0), "subject_id"])
+        ),
+        "added_independent_nonzero_patients": samples.loc[
+            samples.subject_id.isin(new_patients) & samples.burden_score.gt(0)
+        ].subject_id.nunique(),
+        "removed_baseline_studies": len(old_keys - new_keys),
+        "retained_baseline_score_increases": int(
+            joined.burden_score_new.gt(joined.burden_score_old).sum()
+        ),
+        "retained_baseline_score_decreases": int(
+            joined.burden_score_new.lt(joined.burden_score_old).sum()
+        ),
+    }
+    changes = []
+    peers = {
+        "new_icu_ccu_transfer": ("new_stepdown_transfer", 1),
+        "new_stepdown_transfer": ("new_icu_ccu_transfer", 1),
+        "new_invasive_ventilation": ("new_severe_hypoxemia", 2),
+        "new_severe_hypoxemia": ("new_invasive_ventilation", 2),
+        "new_iv_vaso_inotrope_infusion": (None, 2),
+        "in_hospital_death": (None, 3),
+    }
+    for event, (peer, weight) in peers.items():
+        added = joined[event + "_new"].eq(1) & joined[event + "_old"].eq(0)
+        revoked = joined[event + "_new"].eq(0) & joined[event + "_old"].eq(1)
+        uncapped = added if peer is None else added & joined[peer + "_old"].eq(0)
+        # Two new events in one domain can each describe the same domain gain.
+        # These per-event potential contributions must not be added together.
+        changes.append(
+            dict(
+                component=event,
+                new_positive_patients=len(
+                    set(samples.loc[samples[event].eq(1), "subject_id"])
+                    - set(baseline.loc[baseline[event].eq(1), "subject_id"])
+                ),
+                added_events=int(added.sum()),
+                revoked_events=int(revoked.sum()),
+                removed_positive_studies=int(
+                    baseline.loc[~baseline.sample_id.isin(new_keys), event].eq(1).sum()
+                ),
+                capped_additions=int((added & ~uncapped).sum()),
+                potential_domain_points=int(uncapped.sum()) * weight,
+                retained_study_denominator=len(joined),
+            )
+        )
+    domains = []
+    for domain, events, weight in (
+        ("T", list(peers)[:2], 1),
+        ("R", list(peers)[2:4], 2),
+        ("C", [list(peers)[4]], 2),
+        ("D", [list(peers)[5]], 3),
+    ):
+        delta = joined[[e + "_new" for e in events]].max(axis=1) - joined[
+            [e + "_old" for e in events]
+        ].max(axis=1)
+        domains.append(
+            dict(
+                domain=domain,
+                increased_studies=int(delta.gt(0).sum()),
+                decreased_studies=int(delta.lt(0).sum()),
+                actual_points_gained=int(delta.clip(lower=0).sum()) * weight,
+                actual_points_lost=int((-delta.clip(upper=0)).sum()) * weight,
+            )
+        )
+    return {
+        "07_supplementary_scope": coverage,
+        "07_supplementary_summary": pd.DataFrame(
+            summary.items(), columns=["metric", "count"]
+        ),
+        "07_baseline_event_changes": pd.DataFrame(changes),
+        "07_baseline_domain_points": pd.DataFrame(domains),
+    }
 
 
 def missingness_table(samples: pd.DataFrame, ehr: pd.DataFrame) -> pd.DataFrame:
@@ -165,6 +293,9 @@ def render_figures(tables: dict[str, pd.DataFrame], folder: Path) -> None:
         {"font.family": "DejaVu Sans", "font.size": 13, "svg.fonttype": "none"}
     )
     flow = tables["01_cohort_flow"]
+    events = tables["03_label_events"]
+    studies, patients = events.iloc[0][["study_denominator", "patient_denominator"]]
+    high = events.loc[events.component == "high_burden"].iloc[0]
     fig, ax = plt.subplots(figsize=(13.5, 7.5))
     ax.set(xlim=(0, 1), ylim=(0, 1))
     ax.axis("off")
@@ -203,7 +334,7 @@ def render_figures(tables: dict[str, pd.DataFrame], folder: Path) -> None:
     save_figure(
         fig,
         folder / "01_cohort_flow",
-        "Counts change from images to studies. Final cohort: 473 studies / 303 admissions / 222 patients.",
+        f"Counts change from images to studies. Final cohort: {studies} studies / {patients} patients.",
     )
 
     fig, ax = plt.subplots(figsize=(13.5, 7.5))
@@ -281,11 +412,11 @@ def render_figures(tables: dict[str, pd.DataFrame], folder: Path) -> None:
     axes[1].legend(loc="lower right", frameon=False)
     style_axis(axes[1])
     fig.subplots_adjust(left=0.07, right=0.98, bottom=0.18, top=0.87, wspace=0.85)
-    fig.suptitle("Final cohort labels: strong class imbalance", fontsize=21)
+    fig.suptitle("Final cohort labels", fontsize=21)
     save_figure(
         fig,
         folder / "03_labels",
-        "Denominators: 473 studies / 222 patients. Components overlap; counts must not be added. High burden: 12 studies / 8 patients.",
+        f"Denominators: {studies} studies / {patients} patients. Components overlap. High burden: {high.studies} studies / {high.patients} patients.",
     )
 
     missing = tables["04_lab_missingness"]
@@ -319,7 +450,7 @@ def render_figures(tables: dict[str, pd.DataFrame], folder: Path) -> None:
     save_figure(
         fig,
         folder / "04_lab_missingness",
-        "Denominator: 473 studies; missingness is based on last_24h. Descriptive coverage only; retained rules are unchanged.\n"
+        f"Denominator: {studies} studies; missingness is based on last_24h. Descriptive coverage only; retained rules are unchanged.\n"
         "Colors: <30%, 30-50%, >50%. No automatic feature selection or imputation is applied.",
     )
 
@@ -383,7 +514,7 @@ def render_figures(tables: dict[str, pd.DataFrame], folder: Path) -> None:
     axes[0].set(
         xticks=x,
         xticklabels=split.split.str.title(),
-        ylim=(0, 390),
+        ylim=(0, max(split.studies.max(), split.patients.max()) * 1.2 + 10),
         ylabel="Count",
         title="Patient-disjoint groups",
     )
@@ -421,9 +552,48 @@ def render_figures(tables: dict[str, pd.DataFrame], folder: Path) -> None:
     )
 
 
-def generate(root: Path, report_id: str) -> None:
-    if not re.fullmatch(r"midterm_\d{4}-\d{2}-\d{2}", report_id):
-        raise ValueError("Report ID must have the form midterm_YYYY-MM-DD")
+def generate(root: Path, report_id: str, **config_files: Path) -> None:
+    if not re.fullmatch(
+        r"(?:midterm_\d{4}-\d{2}-\d{2}|supplementary_\d{4}-\d{2}-\d{2}_r\d+)", report_id
+    ):
+        raise ValueError("Invalid reporting namespace")
+    defaults = dict(
+        paths="configs/paths.local.json",
+        cohort="configs/cohort.json",
+        split_config="configs/patient_split_v1.json",
+        lab_config="configs/lab_processing_v1.json",
+        feature_config="configs/ehr_features_v1.json",
+        export_config="configs/training_export_v1.json",
+        validation_config="configs/training_validation_v1.json",
+    )
+    configs = {
+        name: root / config_files.get(name, Path(path))
+        for name, path in defaults.items()
+    }
+    paths, export, validation, lab, feature, cohort_config = (
+        load_json(configs[k])
+        for k in (
+            "paths",
+            "export_config",
+            "validation_config",
+            "lab_config",
+            "feature_config",
+            "cohort",
+        )
+    )
+    processed, outputs = (root / paths[k] for k in ("processed", "outputs"))
+    RELEASE = export["release_id"]
+    PACKAGE = (processed / "training" / RELEASE).relative_to(root).as_posix()
+    AUDIT = (outputs / "audit/burden_v2").relative_to(root).as_posix()
+    EHR_AUDIT = f"{AUDIT}/ehr/{feature['audit_version']}"
+    lab_audit = f"{AUDIT}/labs/{lab['audit_version']}"
+    dictionary_path = (
+        (processed / "ehr/burden_v2/lab_dictionary.parquet")
+        .relative_to(root)
+        .as_posix()
+    )
+    output_audit = (outputs / "audit").relative_to(root).as_posix()
+    supplementary = cohort_config.get("burden_v2", {}).get("supplementary_audit", {})
     sources = [
         f"{PACKAGE}/{name}"
         for name in [
@@ -438,25 +608,19 @@ def generate(root: Path, report_id: str) -> None:
         f"{AUDIT}/excluded_studies.csv",
         f"{AUDIT}/split_summary.csv",
         f"{AUDIT}/lab_dictionary_freeze.json",
-        f"{AUDIT}/labs/lab_audit_v1/lab_dictionary_audit.csv",
+        f"{lab_audit}/lab_dictionary_audit.csv",
         f"{AUDIT}/endpoint_decision.json",
         f"{AUDIT}/window_comparison.csv",
         f"{AUDIT}/step_09_report.md",
-        "outputs/audit/admission_match_summary.csv",
-        "outputs/audit/cxr_index_summary.json",
-        "data/processed/ehr/burden_v2/lab_dictionary.parquet",
-        "outputs/audit/study_image_selection_summary.json",
-        "outputs/audit/step_05_csv_tail_checks.csv",
+        f"{output_audit}/admission_match_summary.csv",
+        f"{output_audit}/cxr_index_summary.json",
+        dictionary_path,
+        f"{output_audit}/study_image_selection_summary.json",
+        f"{output_audit}/step_05_csv_tail_checks.csv",
         f"{EHR_AUDIT}/lab_missingness.csv",
         f"{EHR_AUDIT}/lab_window_rejections.csv",
         f"{EHR_AUDIT}/lab_cleaning_summary.csv",
         "configs/image_processing_v1.json",
-        "configs/ehr_features_v1.json",
-        "configs/patient_split_v1.json",
-        "configs/cohort.json",
-        "configs/reviews/image_qc_reviews_v5.csv",
-        "configs/reviews/lab_dictionary_reviews_2026-10-05_v1_rebuild_v1.csv",
-        "configs/reviews/lab_dictionary_scope_2026-10-05_v1_rebuild_v1.csv",
         "README.md",
         f"{PACKAGE}/README.md",
         "src/cohort/build_labels.py",
@@ -464,6 +628,18 @@ def generate(root: Path, report_id: str) -> None:
         "src/ehr/step10b.py",
         "scripts/generate_midterm_report.py",
     ]
+    sources += [p.relative_to(root).as_posix() for p in configs.values()]
+    dictionary_freeze = load_json(root / f"{AUDIT}/lab_dictionary_freeze.json")
+    sources += [
+        Path(p).relative_to(root).as_posix()
+        for p in dictionary_freeze["source_binding"]["review_files_sha256"]
+    ]
+    if supplementary:
+        sources += [
+            supplementary["baseline_labels_path"],
+            supplementary["baseline_split_path"],
+            f"{AUDIT}/supplementary_scope.csv",
+        ]
     for language in ["EN", "ZH"]:
         name = f"docs/codex/MIDTERM_DATA_PREPARATION_2026-10-05_{language}.md"
         if (root / name).exists():
@@ -485,6 +661,21 @@ def generate(root: Path, report_id: str) -> None:
         )
     if metadata["release_id"] != RELEASE or metadata["horizon_hours"] != 72:
         raise ValueError("Unexpected frozen release")
+    if any(
+        metadata[k] != export[k] or metadata[k] != validation[k]
+        for k in (
+            "release_id",
+            "cohort_version",
+            "split_version",
+            "dictionary_version",
+            "feature_set_version",
+        )
+    ):
+        raise ValueError("Reporting configs disagree with the accepted release")
+    for path in configs.values():
+        expected = metadata["configuration_sha256"].get(path.name)
+        if expected and sha256(path) != expected:
+            raise ValueError("Acceptance-bound reporting configuration changed")
     for name in [
         "samples.parquet",
         "ehr_features.parquet",
@@ -506,10 +697,8 @@ def generate(root: Path, report_id: str) -> None:
             raise ValueError(f"Acceptance-bound evidence changed: {name}")
     samples = pd.read_parquet(root / f"{PACKAGE}/samples.parquet")
     ehr = pd.read_parquet(root / f"{PACKAGE}/ehr_features.parquet")
-    if (len(samples), samples.hadm_id.nunique(), samples.subject_id.nunique()) != (
-        473,
-        303,
-        222,
+    if (len(samples), samples.hadm_id.nunique(), samples.subject_id.nunique()) != tuple(
+        validation["expected_counts"][k] for k in ("studies", "admissions", "patients")
     ):
         raise ValueError("Unexpected cohort counts")
     if (len(schema["numeric_features"]), len(schema["categorical_features"])) != (
@@ -519,29 +708,23 @@ def generate(root: Path, report_id: str) -> None:
         raise ValueError("Unexpected feature schema")
     scores, events = label_tables(samples)
     splits = split_table(samples)
-    if splits.patients.tolist() != [156, 33, 33] or splits.studies.tolist() != [
-        337,
-        69,
-        67,
+    if splits.patients.tolist() != [
+        validation["expected_split_patients"][k]
+        for k in ("train", "validation", "test")
+    ] or splits.studies.tolist() != [
+        validation["expected_split_studies"][k] for k in ("train", "validation", "test")
     ]:
         raise ValueError("Unexpected split counts")
     missing = missingness_table(samples, ehr)
-    dictionary = pd.read_parquet(
-        root / "data/processed/ehr/burden_v2/lab_dictionary.parquet"
-    )
+    dictionary = pd.read_parquet(root / dictionary_path)
     retained = dictionary.loc[dictionary.keep == True].copy()  # noqa: E712
     freeze = load_json(root / f"{AUDIT}/lab_dictionary_freeze.json")
-    inventory = pd.read_csv(
-        root / f"{AUDIT}/labs/lab_audit_v1/lab_dictionary_audit.csv"
-    )
-    if (inventory.itemid.nunique(), len(dictionary)) != (368, 370):
-        raise ValueError("Unexpected audited laboratory scope")
-    if (len(retained), retained.itemid.nunique()) != (26, 25):
-        raise ValueError("Unexpected retained laboratory branches")
-    if (
-        before["data/processed/ehr/burden_v2/lab_dictionary.parquet"]
-        != freeze["dictionary_sha256"]
-    ):
+    inventory = pd.read_csv(root / f"{lab_audit}/lab_dictionary_audit.csv")
+    if inventory.itemid.nunique() != dictionary.itemid.nunique():
+        raise ValueError("Audited laboratory inventory disagrees with the dictionary")
+    if retained.itemid.nunique() != 25 or retained.feature_name.nunique() != 25:
+        raise ValueError("The 25 retained laboratory features changed")
+    if before[dictionary_path] != freeze["dictionary_sha256"]:
         raise ValueError("Frozen laboratory dictionary changed")
     audit_missing = pd.read_csv(root / f"{EHR_AUDIT}/lab_missingness.csv")
     check = missing.merge(audit_missing, on=["feature", "split"], validate="one_to_one")
@@ -559,10 +742,10 @@ def generate(root: Path, report_id: str) -> None:
             for k in ["studies", "patients", "admissions"]
         ):
             raise ValueError("Reconstructed split summary disagrees")
-    selection = load_json(root / "outputs/audit/study_image_selection_summary.json")[
+    selection = load_json(root / f"{output_audit}/study_image_selection_summary.json")[
         "counts"
     ]
-    index = load_json(root / "outputs/audit/cxr_index_summary.json")["counts"]
+    index = load_json(root / f"{output_audit}/cxr_index_summary.json")["counts"]
     cohort = pd.read_csv(root / f"{AUDIT}/cohort_flow.csv").set_index("stage")
     excluded = pd.read_csv(
         root / f"{AUDIT}/excluded_studies.csv", usecols=["exclusion_reason"]
@@ -668,6 +851,34 @@ def generate(root: Path, report_id: str) -> None:
         "06_split": splits,
         "06_acceptance": checks,
     }
+    if supplementary:
+        baseline = pd.read_parquet(root / supplementary["baseline_labels_path"])
+        scope = pd.read_csv(root / f"{AUDIT}/supplementary_scope.csv")
+        expected_scope = supplementary.get("expected_scope_counts", [221, 841])
+        if [
+            int(scope.in_review_scope.eq(1).sum()),
+            int(scope.in_review_scope.eq(0).sum()),
+        ] != expected_scope:
+            raise ValueError("Supplementary scope counts changed")
+        tables.update(supplementary_tables(baseline, samples, scope))
+        old_split = pd.read_parquet(root / supplementary["baseline_split_path"])
+        migration = (
+            old_split[["subject_id", "split"]]
+            .drop_duplicates()
+            .merge(
+                samples[["subject_id", "split"]].drop_duplicates(),
+                on="subject_id",
+                how="outer",
+                suffixes=("_old", "_new"),
+                validate="one_to_one",
+            )
+        )
+        tables["07_patient_split_changes"] = (
+            migration.groupby(["split_old", "split_new"], dropna=False)
+            .size()
+            .rename("patients")
+            .reset_index()
+        )
     folders = {
         name: root / "reports" / name / report_id
         for name in ["figures", "tables", "manifests"]
@@ -677,13 +888,13 @@ def generate(root: Path, report_id: str) -> None:
     for name, table in tables.items():
         table.to_csv(folders["tables"] / f"{name}.csv", index=False, encoding="utf-8")
     render_figures(tables, folders["figures"])
-    captions = """# Midterm figure captions and reproduction
+    captions = f"""# Figure captions and reproduction
 
 Run from the repository root: `python scripts/generate_midterm_report.py`.
 Figures are English PNG (220 dpi) and editable-text SVG; tables are aggregate CSV.
 The script reads processed artifacts only. It does not re-run cleaning or train models.
 
-1. **01_cohort_flow:** The available local images yield a shared 473-study cohort.
+1. **01_cohort_flow:** The available local images yield a shared {len(samples)}-study cohort.
    Images and studies are different units. Exclusion reasons are in the companion CSV.
    Patients at excluded stages overlap patients retained elsewhere; do not subtract patient counts.
 2. **02_time_windows:** Information must be available by the CXR time. This is a method
@@ -691,7 +902,7 @@ The script reads processed artifacts only. It does not re-run cleaning or train 
 3. **03_labels:** Final-cohort scores and overlapping components. Studies and unique
    positive patients are separate counts. A zero is absence of qualifying recorded evidence,
    not proof of no clinical deterioration. The defined 0-8 range includes unobserved classes.
-4. **04_lab_missingness:** All retained laboratory features, denominator 473 studies.
+4. **04_lab_missingness:** All retained laboratory features, denominator {len(samples)} studies.
    A value is present when last_24h is nonmissing after approved rules. Companion CSV includes
    train/validation/test coverage. Colors describe historical coverage bands, not new selection.
    Missing count_24h is represented by zero; value aggregations remain NaN.
@@ -701,7 +912,7 @@ The script reads processed artifacts only. It does not re-run cleaning or train 
    in the per-item/per-feature CSV are distinct within each group, not a global unique total.
    This release has no finite value removed by an unreviewed clinical range rule.
 6. **06_split_acceptance:** Patient-disjoint allocation and recorded independent check status.
-   High-burden patients in validation/test are one each. Package acceptance establishes
+   High-burden patients are counted independently within each split. Package acceptance establishes
    reproducible data contracts, not predictive or clinical validity. Train-only model
    preprocessing is not_applicable because model training has not started.
 
@@ -764,7 +975,11 @@ Keep detailed cleaning and component tables as backup. Leave 20 s spare.
             "patient disjointness",
             "laboratory coverage",
         ],
-        command=f"python scripts/generate_midterm_report.py --report-id {report_id}",
+        command=f"python scripts/generate_midterm_report.py --report-id {report_id}"
+        + "".join(
+            f" --{k.replace('_', '-')} {p.relative_to(root).as_posix()}"
+            for k, p in configs.items()
+        ),
         confidentiality="Aggregate statistics only; no subject IDs, sample keys, individual times or images exported.",
     )
     (folders["manifests"] / "report_manifest.json").write_text(
@@ -788,8 +1003,23 @@ def main() -> None:
         default="midterm_2026-10-05",
         help="Reporting output namespace (midterm_YYYY-MM-DD)",
     )
+    for name in (
+        "paths",
+        "cohort",
+        "split-config",
+        "lab-config",
+        "feature-config",
+        "export-config",
+        "validation-config",
+    ):
+        parser.add_argument("--" + name, type=Path)
     args = parser.parse_args()
-    generate(args.root.resolve(), args.report_id)
+    configs = {
+        k: v
+        for k, v in vars(args).items()
+        if k not in {"root", "report_id"} and v is not None
+    }
+    generate(args.root.resolve(), args.report_id, **configs)
 
 
 if __name__ == "__main__":

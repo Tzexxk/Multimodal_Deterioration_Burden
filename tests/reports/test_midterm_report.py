@@ -99,6 +99,43 @@ class MidtermReportTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             report.label_tables(self.samples)
 
+    def test_supplementary_changes_count_patients_and_domain_caps(self):
+        baseline = self.samples.copy()
+        baseline.loc[0, "new_invasive_ventilation"] = 1
+        baseline.loc[0, "burden_score"] = 5
+        current = baseline.loc[baseline.sample_id != "d"].copy()
+        current.loc[0, "new_severe_hypoxemia"] = 1
+        current.loc[1, "in_hospital_death"] = 0
+        current.loc[1, "burden_score"] = 1
+        added = current.iloc[[0, 0]].copy()
+        added["sample_id"] = ["e", "f"]
+        added["subject_id"] = 4
+        added["hadm_id"] = 40
+        current = pd.concat([current, added], ignore_index=True)
+        scope = pd.DataFrame(
+            dict(
+                sample_id=["e", "f", "g"],
+                baseline_reason=["med", "med", "icu"],
+                in_review_scope=[1, 1, 0],
+                disposition=["restored", "restored", "protected_exclusion"],
+            )
+        )
+        tables = report.supplementary_tables(baseline, current, scope)
+        summary = tables["07_supplementary_summary"].set_index("metric")["count"]
+        self.assertEqual(summary["added_studies"], 2)
+        self.assertEqual(summary["added_independent_nonzero_patients"], 1)
+        self.assertEqual(summary["removed_baseline_studies"], 1)
+        self.assertEqual(summary["retained_baseline_score_decreases"], 1)
+        events = tables["07_baseline_event_changes"].set_index("component")
+        self.assertEqual(events.loc["new_severe_hypoxemia", "capped_additions"], 1)
+        self.assertEqual(events.loc["in_hospital_death", "revoked_events"], 1)
+        domains = tables["07_baseline_domain_points"].set_index("domain")
+        self.assertEqual(domains.loc["R", "actual_points_gained"], 0)
+        self.assertEqual(domains.loc["D", "actual_points_lost"], 3)
+        scope.loc[2, "sample_id"] = "a"
+        with self.assertRaisesRegex(ValueError, "Protected"):
+            report.supplementary_tables(baseline, current, scope)
+
 
 if __name__ == "__main__":
     unittest.main()

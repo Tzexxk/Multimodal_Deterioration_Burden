@@ -916,7 +916,7 @@ class TrainingValidationTests(unittest.TestCase):
                 self.root, self.args, self.settings, self.processed, self.outputs
             )
 
-    def prepare_provenance(self):
+    def prepare_provenance(self, supplementary=False):
         from src.cohort import create_patient_split, freeze_cohort
         from src.data import export_training_package
         from src.ehr import build_ehr_features, step10b
@@ -929,6 +929,32 @@ class TrainingValidationTests(unittest.TestCase):
                 step.write_json(path, data)
             return path
 
+        if supplementary:
+            self.settings.update(
+                release_id="burden_v2_h72_r02",
+                cohort_version="burden_v2_h72_r02",
+                split_version="burden_v2_h72_r02_split_v1",
+                dictionary_version="lab_dictionary_r02",
+                feature_set_version="ehr_features_r02",
+            )
+            target = self.package.with_name(self.settings["release_id"])
+            self.package.rename(target)
+            self.package, self.archive = target, target.with_suffix(".zip")
+            save(self.args.validation_config, self.settings)
+            metadata = json.loads((self.package / "dataset_metadata.json").read_text())
+            metadata.update(
+                {
+                    k: self.settings[k]
+                    for k in (
+                        "release_id",
+                        "cohort_version",
+                        "split_version",
+                        "dictionary_version",
+                        "feature_set_version",
+                    )
+                }
+            )
+            save(self.package / "dataset_metadata.json", metadata)
         audit = self.outputs / "audit/burden_v2"
         data = self.processed / "ehr/burden_v2"
         cohort_version, split_version = (
@@ -1152,6 +1178,68 @@ class TrainingValidationTests(unittest.TestCase):
             self.args.feature_config,
             self.args.export_config,
         ]
+        decisions = {}
+        if supplementary:
+            for name in ("cohort_decisions_path", "event_decisions_path"):
+                path = self.root / (name + ".csv")
+                path.write_text("sample_id,decision\n", encoding="utf-8")
+                self.files[name] = path
+                decisions[name.replace("_path", "_sha256")] = _file_hash(path)
+            save(
+                self.args.cohort,
+                {
+                    "burden_v2": {
+                        name: str(self.files[name])
+                        for name in ("cohort_decisions_path", "event_decisions_path")
+                    }
+                },
+            )
+        for n in range(1, 12):
+            with _OutputRun(self.outputs, n) as run:
+                run.path(self.outputs / f"synthetic_step_{n}.txt").write_text(
+                    "Complete synthetic provenance marker"
+                )
+                if supplementary and n == 5:
+                    save(
+                        run.path(audit / "run_metadata.json"),
+                        dict(run_id=run.run_id, input_versions={}, **decisions),
+                    )
+        if supplementary:
+            from src.cohort.audit_burden_labels import save_audit_snapshot
+
+            index = save_audit_snapshot(self.outputs)
+            snapshot_bindings = {
+                index.relative_to(self.root).as_posix(): _file_hash(index)
+            }
+            meta_path = audit / "run_metadata.json"
+            metadata05 = json.loads(meta_path.read_text())
+            # The snapshot is the original review source, not its own later audit.
+            metadata05["review_snapshot_bindings"] = snapshot_bindings
+            with _OutputRun(self.outputs, 5) as run:
+                metadata05["run_id"] = run.run_id
+                save(run.path(meta_path), metadata05)
+            marker = self.outputs / "audit/step_05_manifest.json"
+            review = save(
+                self.root / "endpoint_review.json",
+                {"reviewer": "Synthetic reviewer only"},
+            )
+            endpoint = json.loads(self.files["endpoint_decision"].read_text())
+            endpoint.update(
+                **decisions,
+                review_snapshot_bindings=snapshot_bindings,
+                review_records_sha256={
+                    review.relative_to(self.root).as_posix(): _file_hash(review)
+                },
+                source_audit=dict(
+                    input_versions={},
+                    run_id=metadata05["run_id"],
+                    manifest_path=marker.relative_to(self.root).as_posix(),
+                    manifest_sha256=_file_hash(marker),
+                    metadata_path=meta_path.relative_to(self.root).as_posix(),
+                    metadata_sha256=_file_hash(meta_path),
+                ),
+            )
+            save(self.files["endpoint_decision"], endpoint)
         binding = dict(
             settings=export_settings,
             cohort=cohort_identity,
@@ -1191,11 +1279,6 @@ class TrainingValidationTests(unittest.TestCase):
                 }
             },
         )
-        for n in range(1, 12):
-            with _OutputRun(self.outputs, n) as run:
-                run.path(self.outputs / f"synthetic_step_{n}.txt").write_text(
-                    "Complete synthetic provenance marker"
-                )
         for mode in ("audit", "build"):
             namespace = self.outputs / "step_10b" / mode
             with _OutputRun(namespace, 10) as run:
@@ -1218,7 +1301,25 @@ class TrainingValidationTests(unittest.TestCase):
         self.assertEqual(report["checks"]["provenance"]["status"], "fail")
         self.assertEqual(before, self.hashes())
 
+    def test_r02_synthetic_chain_checks_new_decisions_and_snapshots(self):
+        self.prepare_provenance(supplementary=True)
+        self.assertEqual(step.run_validation(self.root, self.args), 0)
+        path = self.files["cohort_decisions_path"]
+        path.write_text("sample_id,decision\nchanged,pending\n", encoding="utf-8")
+        self.assertEqual(step.run_validation(self.root, self.args), 1)
+        path.write_text("sample_id,decision\n", encoding="utf-8")
+        self.assertEqual(step.run_validation(self.root, self.args), 0)
+        endpoint = json.loads(self.files["endpoint_decision"].read_text())
+        index = self.root / next(iter(endpoint["review_snapshot_bindings"]))
+        snapshot = json.loads(index.read_text())
+        Path(next(iter(snapshot["files"].values()))["path"]).write_text(
+            "tampered snapshot"
+        )
+        self.assertEqual(step.run_validation(self.root, self.args), 1)
+
     def test_configuration_and_empty_failure_headers(self):
+        with self.assertRaises(ValueError):
+            step.load_settings(ROOT / "configs/training_validation_r02.json")
         settings = copy.deepcopy(self.settings)
         settings["relocation_policy"] = "skip"
         step.write_json(self.args.validation_config, settings)

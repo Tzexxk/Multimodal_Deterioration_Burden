@@ -24,8 +24,11 @@ from src.cohort.audit_burden_labels import (
     audit_burden_labels,
     candidate_conflict_exclusion,
     load_candidate_exclusions,
+    load_review_decisions,
     medication_identity_exclusion,
+    save_audit_snapshot,
     validate_rules,
+    verify_snapshot,
 )
 from src.cohort.build_candidates import (
     build_candidate,
@@ -44,6 +47,7 @@ from src.cohort.burden_events import (
 )
 from src.cohort.burden_io import (
     COMPONENTS,
+    SUPPLEMENTARY_COLUMNS,
     TABLE_COLUMNS,
     ParquetSink,
     clinical_time,
@@ -296,6 +300,8 @@ class BurdenAuditTests(unittest.TestCase):
 
     def prepare(self) -> None:
         for name, fields in TABLE_COLUMNS.items():
+            if self.cohort["burden_v2"].get("supplementary_audit"):
+                fields += " " + SUPPLEMENTARY_COLUMNS.get(name, "")
             path = self.iv / self.ehr["burden_v2"]["tables"][name]
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("w", newline="", encoding="utf-8") as stream:
@@ -500,6 +506,368 @@ class BurdenAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Admissions changed"):
             self.run_audit()
         self.assertEqual(path.read_bytes(), old)
+
+    def test_supplementary_positive_and_history_uncertainty(self):
+        rules = self.cohort["burden_v2"]
+        rules["supplementary_audit"] = {"enabled": True}
+        chart = {**self.tables["chartevents"][0], "charttime": dt(5), "warning": ""}
+        self.tables["chartevents"].append(chart)
+        values, records = evaluate(self.study(), self.context(), rules, {})
+        self.assertEqual(values[COMPONENTS[3]], 1)
+        unknown = next(r for r in records if r["qualifies"] is None)
+        self.assertEqual(unknown["blocks_event"], 0)
+        self.assertEqual(
+            unknown["uncertainty_relevance"], "independent_after_confirmed_positive"
+        )
+        self.tables["chartevents"][-1]["charttime"] = dt(3)
+        values, _ = evaluate(self.study(), self.context(), rules, {})
+        self.assertIsNone(values[COMPONENTS[3]])
+        self.assertIsNone(values["burden_score"])
+        self.tables["chartevents"].pop()
+        self.tables["emar"] = [
+            dict(self.tables["emar"][0], charttime=dt(-11), medication="unknown")
+        ]
+        context = self.context()
+        values, records = evaluate(self.study(), context, rules, {})
+        self.assertEqual(values[COMPONENTS[4]], 0)
+        self.assertTrue(
+            any(
+                r["uncertainty_relevance"] == "history_without_window_infusion"
+                for r in records
+            )
+        )
+        self.tables["emar"][0]["charttime"] = dt(-1)
+        rules[IDENTITY_POLICY]["confirmed"] = True
+        self.assertIsNone(
+            medication_identity_exclusion(self.study(), self.context(), rules)[0]
+        )
+        self.tables["emar"].append(
+            dict(
+                self.tables["emar"][0],
+                emar_id="new",
+                charttime=dt(5),
+                medication="norepinephrine",
+            )
+        )
+        values, _ = evaluate(self.study(), self.context(), rules, {})
+        self.assertIsNone(values[COMPONENTS[4]])
+        self.assertIsNotNone(
+            medication_identity_exclusion(self.study(), self.context(), rules)[0]
+        )
+
+    def test_supplementary_mixed_components_and_missing_support_fields(self):
+        rules = self.cohort["burden_v2"]
+        rules["supplementary_audit"] = {"enabled": True}
+        self.tables["emar"][0].update(pharmacy_id="9", medication="")
+        self.tables["prescriptions"] = [
+            dict(
+                subject_id="1",
+                hadm_id="10",
+                pharmacy_id="9",
+                poe_id="9",
+                poe_seq="1",
+                starttime=dt(0),
+                stoptime=dt(10),
+                drug_type="BASE",
+                drug="saline",
+                route="IV",
+            )
+        ]
+        rules["medications"]["saline"] = reviewed(canonical_drug=None)
+        context = self.context()
+        self.assertEqual(
+            context["medication_events"][0]["component_identity_status"],
+            "all_confirmed_non_target",
+        )
+        self.assertEqual(context["medication_events"][0]["action"], "exclude")
+        self.tables["prescriptions"].append(
+            dict(
+                self.tables["prescriptions"][0],
+                drug_type="ADDITIVE",
+                drug="norepinephrine",
+            )
+        )
+        context = self.context()
+        self.assertEqual(
+            context["medication_events"][0]["reason"],
+            "unresolved_medication_components",
+        )
+        self.assertIsNone(evaluate(self.study(), context, rules, {})[0][COMPONENTS[4]])
+        self.tables["prescriptions"] = [self.tables["prescriptions"][-1]]
+        self.tables["emar"][0]["medication"] = "saline"
+        context = self.context()
+        self.assertEqual(
+            context["medication_events"][0]["reason"],
+            "unresolved_medication_components",
+        )
+        self.assertIsNone(evaluate(self.study(), context, rules, {})[0][COMPONENTS[4]])
+        self.tables["procedureevents"][0]["endtime"] = ""
+        context = self.context()
+        self.assertTrue(context["ventilation_rejected"])
+        self.assertIsNone(evaluate(self.study(), context, rules, {})[0][COMPONENTS[2]])
+
+    def test_versioned_decision_validation_and_supersession(self):
+        legacy = dict(
+            sample_id="p1_h10_s100",
+            reason="blocker",
+            source_record_keys='["admissions:key"]',
+            reviewer="synthetic",
+            rationale="old review",
+            version="v1",
+        )
+        row = {
+            **legacy,
+            "version": "v2",
+            "decision": "resolve_blocker",
+            "reviewed_on": "2026-10-08",
+            "source_run_id": "a" * 32,
+            "source_manifest_sha256": "b" * 64,
+            "supersedes": json.dumps(
+                [
+                    {
+                        "sample_id": legacy["sample_id"],
+                        "reason": "blocker",
+                        "version": "v1",
+                    }
+                ]
+            ),
+        }
+        path = self.config / "decisions.csv"
+
+        def write(rows):
+            with path.open("w", encoding="utf-8", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(row))
+                writer.writeheader()
+                writer.writerows(rows)
+
+        write([row])
+        active = load_review_decisions(path, {legacy["sample_id"]}, False, [legacy])
+        self.assertEqual([r["decision"] for r in active], ["resolve_blocker"])
+        write([{**row, "supersedes": ""}])
+        with self.assertRaisesRegex(ValueError, "Conflicting active"):
+            load_review_decisions(path, {legacy["sample_id"]}, False, [legacy])
+        write([{**row, "decision": "pending"}])
+        with self.assertRaisesRegex(ValueError, "Pending"):
+            load_review_decisions(path, {legacy["sample_id"]}, False, [legacy])
+        write([{**row, "source_manifest_sha256": "bad"}])
+        with self.assertRaisesRegex(ValueError, "binding"):
+            load_review_decisions(path, {legacy["sample_id"]}, False, [legacy])
+
+    def test_versioned_event_decisions_zero_one_pending_and_source_scope(self):
+        row = dict(
+            sample_id="p1_h10_s100",
+            horizon_hours="72",
+            component=COMPONENTS[3],
+            event_flag="0",
+            first_event_time="",
+            source_record_keys='["chartevents:key"]',
+            reviewer="Synthetic only",
+            rationale="Synthetic event review",
+            version="v1",
+            override_scope="component",
+            decision="set_event",
+            reviewed_on="2026-10-08",
+            source_run_id="a" * 32,
+            source_manifest_sha256="b" * 64,
+            supersedes="",
+        )
+        path = self.config / "event_decisions.csv"
+
+        def load(value):
+            with path.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(row))
+                writer.writeheader()
+                writer.writerow(value)
+            return load_review_decisions(path, {row["sample_id"]}, True, [])
+
+        self.assertEqual(load(row)[0]["event_flag"], "0")
+        self.assertEqual(
+            load({**row, "event_flag": "1", "first_event_time": dt(4)})[0][
+                "event_flag"
+            ],
+            "1",
+        )
+        self.assertEqual(load({**row, "decision": "pending", "event_flag": ""}), [])
+        source = load(
+            {
+                **row,
+                "decision": "exclude_source",
+                "override_scope": "source_record",
+                "event_flag": "",
+            }
+        )[0]
+        self.assertEqual(source["event_flag"], "0")
+        for change in (
+            {"event_flag": "1"},
+            {"first_event_time": dt(4)},
+            {"decision": "pending"},
+            {"component": "not_an_event"},
+            {"horizon_hours": "24"},
+            {"source_record_keys": '["key", "key"]'},
+        ):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                load({**row, **change})
+
+    def test_supplementary_isolation_shadow_audit_and_bound_resolution(self):
+        keys = json.dumps([record_key("admissions", self.tables["admissions"][0])])
+        legacy = dict(
+            sample_id="p1_h10_s100",
+            reason="Invasive ventilation evidence or onset cannot be verified",
+            source_record_keys=keys,
+            reviewer="synthetic",
+            rationale="synthetic exclusion",
+            version="old_v1",
+        )
+        exclusion_path = self.config / "legacy.csv"
+        with exclusion_path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(legacy))
+            writer.writeheader()
+            writer.writerow(legacy)
+        self.cohort["burden_v2"]["candidate_exclusions_path"] = str(exclusion_path)
+        self.prepare()
+        self.run_audit()
+        baseline_outputs = self.outputs
+        old_manifest = (baseline_outputs / "audit/step_05_manifest.json").read_bytes()
+        self.cohort["burden_v2"]["supplementary_audit"] = dict(
+            baseline_outputs=str(baseline_outputs),
+            baseline_exclusions_path=str(
+                baseline_outputs / "audit/burden_v2/excluded_studies.csv"
+            ),
+            expected_scope_counts=[1, 0],
+        )
+        self.processed, self.outputs = (
+            self.root / "r02/processed",
+            self.root / "r02/outputs",
+        )
+        self.paths.update(
+            processed=str(self.processed),
+            outputs=str(self.outputs),
+            cache=str(self.root / "r02/cache"),
+        )
+        self.prepare()
+        metadata = self.run_audit()
+        self.assertEqual(self.wide(72)[100]["label_status"], "excluded")
+        preview = pq.read_table(
+            self.processed / "cohort/burden_v2/supplementary_event_audit.parquet"
+        ).to_pylist()
+        self.assertTrue(
+            any(r["study_id"] == 100 and r["burden_score"] == 8 for r in preview)
+        )
+        index = save_audit_snapshot(self.outputs)
+        snapshot = verify_snapshot(index)
+        row = {
+            **legacy,
+            "version": "new_v1",
+            "decision": "resolve_blocker",
+            "reviewed_on": "2026-10-08",
+            "source_run_id": metadata["run_id"],
+            "source_manifest_sha256": snapshot["source_manifest_sha256"],
+            "supersedes": json.dumps(
+                [
+                    {
+                        "sample_id": legacy["sample_id"],
+                        "reason": legacy["reason"],
+                        "version": legacy["version"],
+                    }
+                ]
+            ),
+        }
+        review_path = self.config / "cohort_decisions.csv"
+        with review_path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(row))
+            writer.writeheader()
+            writer.writerow(row)
+        self.cohort["burden_v2"]["cohort_decisions_path"] = str(review_path)
+        preview_evidence = pq.read_table(
+            self.processed / "cohort/burden_v2/supplementary_event_evidence.parquet"
+        ).to_pylist()
+        episode = next(
+            r
+            for r in preview_evidence
+            if r["sample_id"] == legacy["sample_id"]
+            and r["horizon_hours"] == 72
+            and r["component"] == COMPONENTS[2]
+            and r["qualifies"] == 1
+        )
+        event_row = {
+            k: row[k]
+            for k in (
+                "sample_id",
+                "reviewer",
+                "rationale",
+                "version",
+                "reviewed_on",
+                "source_run_id",
+                "source_manifest_sha256",
+            )
+        }
+        event_row.update(
+            horizon_hours="72",
+            component=COMPONENTS[2],
+            event_flag="",
+            first_event_time="",
+            source_record_keys=json.dumps([episode["source_record_key"]]),
+            decision="exclude_source",
+            override_scope="source_record",
+            supersedes="",
+        )
+        event_path = self.config / "event_decisions.csv"
+        with event_path.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(event_row))
+            writer.writeheader()
+            writer.writerow(event_row)
+        self.cohort["burden_v2"]["event_decisions_path"] = str(event_path)
+        (self.config / "cohort.json").write_text(
+            json.dumps(self.cohort), encoding="utf-8"
+        )
+        reviewed_metadata = self.run_audit()
+        self.assertEqual(self.wide(72)[100]["burden_score"], 8)
+        self.assertEqual(self.wide(72)[100][COMPONENTS[2]], 0)
+        self.assertEqual(self.wide(72)[100][COMPONENTS[3]], 1)
+        self.assertTrue(reviewed_metadata["review_snapshot_bindings"])
+        self.assertEqual(
+            (baseline_outputs / "audit/step_05_manifest.json").read_bytes(),
+            old_manifest,
+        )
+        retained = (self.outputs / "audit/step_05_manifest.json").read_bytes()
+        original_config = (self.config / "cohort.json").read_bytes()
+        changed_rules = copy.deepcopy(self.cohort)
+        changed_rules["burden_v2"]["rules_version"] += "_changed"
+        (self.config / "cohort.json").write_text(
+            json.dumps(changed_rules), encoding="utf-8"
+        )
+        with self.assertRaisesRegex(
+            ValueError, "rules, dictionary or audit code changed"
+        ):
+            self.run_audit()
+        self.assertEqual(
+            (self.outputs / "audit/step_05_manifest.json").read_bytes(), retained
+        )
+        (self.config / "cohort.json").write_bytes(original_config)
+        self.tables["chartevents"].append(
+            dict(self.tables["chartevents"][0], charttime=dt(6))
+        )
+        with (self.iv / self.ehr["burden_v2"]["tables"]["chartevents"]).open(
+            "a", newline="", encoding="utf-8"
+        ) as stream:
+            csv.writer(stream).writerow(
+                [
+                    self.tables["chartevents"][-1].get(f, "")
+                    for f in TABLE_COLUMNS["chartevents"].split()
+                ]
+            )
+        with self.assertRaisesRegex(ValueError, "raw source versions changed"):
+            self.run_audit()
+        self.assertEqual(
+            (self.outputs / "audit/step_05_manifest.json").read_bytes(), retained
+        )
+        entry = next(iter(snapshot["files"].values()))
+        Path(entry["path"]).write_bytes(b"tampered synthetic snapshot")
+        with self.assertRaisesRegex(ValueError, "snapshot evidence changed"):
+            self.run_audit()
+        self.assertEqual(
+            (self.outputs / "audit/step_05_manifest.json").read_bytes(), retained
+        )
 
     def context(self) -> dict:
         admission = self.tables["admissions"][0]

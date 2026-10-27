@@ -1070,6 +1070,10 @@ def verify_provenance(root, args, settings, processed, outputs):
         / _json_file(args.lab_config)["audit_version"]
         / "lab_audit_manifest.json",
     }
+    cohort_rules = _json_file(args.cohort).get("burden_v2", {})
+    for field in ("cohort_decisions_path", "event_decisions_path"):
+        if cohort_rules.get(field):
+            files[field] = _resolve_config_path(cohort_rules[field], root, raw=False)
     require(
         set(files) == set(package_record["binding"]["source_sha256"]),
         "Incomplete package source binding",
@@ -1166,6 +1170,80 @@ def verify_provenance(root, args, settings, processed, outputs):
             raw_versions[str(path)] = version
     raw_root = _resolve_config_path(_json_file(args.paths)["mimic_iv"], root, raw=True)
     decision = record(files["endpoint_decision"])
+    if cohort_rules.get("supplementary_audit") or any(
+        field in files for field in ("cohort_decisions_path", "event_decisions_path")
+    ):
+        metadata05 = record(audit / "run_metadata.json")
+        source05 = decision["source_audit"]
+        require(
+            source05["run_id"]
+            == metadata05["run_id"]
+            == record(outputs / "audit/step_05_manifest.json")["run_id"],
+            "Endpoint audit run changed",
+        )
+        for field in ("manifest", "metadata"):
+            expected_path = outputs / (
+                "audit/step_05_manifest.json"
+                if field == "manifest"
+                else "audit/burden_v2/run_metadata.json"
+            )
+            require(
+                _under_root(root, source05[field + "_path"]) == expected_path,
+                "Endpoint audit path changed",
+            )
+            digest(expected_path, source05[field + "_sha256"])
+        for field in ("cohort_decisions_path", "event_decisions_path"):
+            if field in files:
+                hash_field = field.replace("_path", "_sha256")
+                require(
+                    digest(files[field])
+                    == decision.get(hash_field)
+                    == metadata05.get(hash_field),
+                    "Difficult-sample decision binding changed",
+                )
+        require(
+            decision.get("review_snapshot_bindings", {})
+            == metadata05.get("review_snapshot_bindings", {}),
+            "Endpoint review snapshot set changed",
+        )
+        require(
+            decision.get("baseline_reference_bindings", {})
+            == metadata05.get("baseline_reference_bindings", {}),
+            "Baseline reference set changed",
+        )
+        for name, expected in decision.get("baseline_reference_bindings", {}).items():
+            digest(_under_root(root, name), expected)
+        for name, expected in decision.get("review_records_sha256", {}).items():
+            digest(_under_root(root, name), expected)
+        for name, expected in decision.get("review_snapshot_bindings", {}).items():
+            index = _under_root(root, name)
+            digest(index, expected)
+            snapshot = record(index)
+            original_manifest = None
+            for original, entry in snapshot["files"].items():
+                path = Path(entry["path"])
+                require(
+                    path.resolve().is_relative_to(index.parent.resolve()),
+                    "Snapshot path escaped",
+                )
+                digest(path, entry["sha256"])
+                if Path(original).name == "step_05_manifest.json":
+                    require(
+                        entry["sha256"] == snapshot["source_manifest_sha256"],
+                        "Snapshot manifest changed",
+                    )
+                    original_manifest = record(path)
+            require(
+                original_manifest is not None
+                and original_manifest["run_id"] == snapshot["run_id"]
+                and original_manifest["files"]
+                == {
+                    p: v["sha256"]
+                    for p, v in snapshot["files"].items()
+                    if Path(p).name != "step_05_manifest.json"
+                },
+                "Snapshot provenance changed",
+            )
     for name, version in decision["source_audit"]["input_versions"].items():
         path = _under_root(raw_root, _json_file(args.ehr)["burden_v2"]["tables"][name])
         require(

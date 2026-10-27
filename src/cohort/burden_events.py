@@ -27,7 +27,8 @@ EVIDENCE_COLUMNS = (
     "first_event_time baseline_status event_status source_file source_record_key "
     "source_record_keys source_itemid source_value qualifies exclusion_reason "
     "review_status raw_evidence override_version automated_qualifies "
-    "automated_event_status automated_exclusion_reason"
+    "automated_event_status automated_exclusion_reason blocks_event "
+    "blocking_reason uncertainty_relevance"
 ).split()
 EVENT_COLUMNS = ["sample_id", "subject_id", "hadm_id", "study_id", "horizon_hours"]
 for _component in COMPONENTS:
@@ -36,6 +37,7 @@ for _component in COMPONENTS:
         f"{_component}_first_event_time",
         f"{_component}_event_status",
         f"{_component}_baseline_status",
+        f"{_component}_first_event_time_status",
     ]
 EVENT_COLUMNS += (
     "T R C D burden_score phys_death high_burden label_status "
@@ -107,6 +109,9 @@ def evidence(
         "review_status": "pending" if qualifies is None else "not_required",
         "raw_evidence": json.dumps(row, sort_keys=True, default=str),
         "override_version": "",
+        "blocks_event": int(qualifies is None),
+        "blocking_reason": reason if qualifies is None else "",
+        "uncertainty_relevance": "blocking" if qualifies is None else "determined",
     }
 
 
@@ -388,7 +393,11 @@ def hypoxemia_evidence(study: dict, context: dict, rules: dict) -> list[dict]:
                 reason = "unconfirmed_spo2_dictionary_or_unit"
             if not reason and (value is None or not 0 <= value <= 100):
                 reason = "invalid_spo2_value"
-            if not reason and (value == 0 or boolean(row["warning"]) is not False):
+            if not reason and (
+                value == 0
+                or row["warning"] in (None, "")
+                or boolean(row["warning"]) is not False
+            ):
                 reason = "spo2_artifact_review"
             if not reason and conflict:
                 reason = "conflicting_spo2_at_same_time"
@@ -474,6 +483,28 @@ def medication_identity(row: dict, sources: dict, rules: dict) -> None:
             row["resolved_medication"] = matches[0][field].strip()
             row["medication_name_source"] = source
             row[status] = "resolved"
+    if rules.get("supplementary_audit") and all(key):
+        for source in ("pharmacy", "prescriptions"):
+            matches = sources[source].get(key, [])
+            row[f"{source}_records"] = matches
+            row[f"{source}_match_count"] = sum(v["duplicate_count"] for v in matches)
+            row["source_record_keys"] = sorted(
+                set(row["source_record_keys"])
+                | {v["source_record_key"] for v in matches}
+            )
+        components = row["prescriptions_records"]
+        mappings = [
+            confirmed(rules["medications"], (v.get("drug") or "").strip().casefold())
+            for v in components
+        ]
+        row["component_identity_status"] = "not_available"
+        if components:
+            if all(mappings) and all(v.get("canonical_drug") is None for v in mappings):
+                row["component_identity_status"] = "all_confirmed_non_target"
+            elif len(components) > 1 or not all(mappings):
+                row["component_identity_status"] = "requires_review"
+            else:
+                row["component_identity_status"] = "single_confirmed_component"
 
 
 def aggregate_medications(
@@ -515,9 +546,27 @@ def aggregate_medications(
             row["reason"] = "emar_detail_key_mismatch"
         medication_identity(row, sources, rules)
         drug = confirmed(rules["medications"], row["resolved_medication"].casefold())
+        if row.get("component_identity_status") == "single_confirmed_component":
+            component = confirmed(
+                rules["medications"],
+                row["prescriptions_records"][0]["drug"].strip().casefold(),
+            )
+            if not drug or component["canonical_drug"] != drug.get("canonical_drug"):
+                row["component_identity_status"] = "requires_review"
         row["medication_mapping_confirmed"] = bool(drug)
         row["canonical_drug"] = drug.get("canonical_drug") if drug else None
         row["action"] = "review"
+        if row.get("component_identity_status") == "all_confirmed_non_target":
+            if drug and drug.get("canonical_drug") is not None:
+                row["reason"] = row["reason"] or "conflicting_medication_components"
+            else:
+                row["medication_mapping_confirmed"] = True
+                row["canonical_drug"] = None
+                row["action"] = "exclude"
+                continue
+        if row.get("component_identity_status") == "requires_review":
+            row["reason"] = row["reason"] or "unresolved_medication_components"
+            drug = None
         if drug and drug.get("canonical_drug") is None:
             row["action"] = "exclude"
             continue
@@ -799,6 +848,9 @@ def apply_override(
                     review_status="reviewed",
                     exclusion_reason="manual_source_exclusion",
                     override_version=override["version"],
+                    blocks_event=0,
+                    blocking_reason="",
+                    uncertainty_relevance="reviewed_source_exclusion",
                 )
         manual = evidence(
             study, component, "overrides", override, None, 0, "manual_source_exclusion"
@@ -806,6 +858,9 @@ def apply_override(
         manual.update(
             review_status="reviewed",
             override_version=override["version"],
+            blocks_event=0,
+            blocking_reason="",
+            uncertainty_relevance="reviewed_component",
             source_record_keys=json.dumps(keys),
             source_record_key=record_key("reviewed_source_records", override),
             automated_qualifies=None,
@@ -828,6 +883,9 @@ def apply_override(
             review_status="reviewed",
             exclusion_reason="manual_override",
             override_version=override["version"],
+            blocks_event=0,
+            blocking_reason="",
+            uncertainty_relevance="reviewed_component",
         )
     manual = evidence(
         study,
@@ -854,6 +912,60 @@ def apply_override(
     values.append(manual)
 
 
+def classify_uncertainty(study: dict, records: list[dict], supplementary: bool) -> None:
+    """Only explicit independent later evidence can leave a confirmed event intact."""
+    if not supplementary:
+        return
+    times = [r["event_time"] for r in records if r["qualifies"] == 1]
+    first = min(times) if times else None
+    independent = {
+        "indirect_ventilation_only",
+        "spo2_artifact_review",
+        "conflicting_spo2_at_same_time",
+        "unconfirmed_transfer_mapping_or_origin",
+    }
+    window_infusion = any(
+        r["component"] == COMPONENTS[4]
+        and in_window(study, r["event_time"])
+        and r["exclusion_reason"] != "excluded_medication_or_administration"
+        for r in records
+    )
+    for row in records:
+        if row["qualifies"] is not None:
+            row["blocks_event"] = 0
+            row["blocking_reason"] = ""
+            continue
+        raw = json.loads(row["raw_evidence"])
+        owns = (
+            identifier(raw.get("subject_id")) == study["subject_id"]
+            and identifier(raw.get("hadm_id")) == study["hadm_id"]
+        )
+        if (
+            first is not None
+            and row["event_time"] is not None
+            and row["event_time"] > first
+            and row["exclusion_reason"] in independent
+            and owns
+        ):
+            row.update(
+                blocks_event=0,
+                blocking_reason="",
+                uncertainty_relevance="independent_after_confirmed_positive",
+            )
+        elif (
+            row["component"] == COMPONENTS[4]
+            and not window_infusion
+            and row["event_time"] is not None
+            and row["event_time"] <= study["t0"]
+            and owns
+        ):
+            row.update(
+                blocks_event=0,
+                blocking_reason="",
+                uncertainty_relevance="history_without_window_infusion",
+            )
+
+
 def evaluate(
     study: dict, context: dict, rules: dict, overrides: dict
 ) -> tuple[dict, list[dict]]:
@@ -877,8 +989,12 @@ def evaluate(
         if override:
             if study["candidate_status"] != "eligible":
                 raise ValueError("Event overrides cannot bypass candidate eligibility")
-            apply_override(study, component, records, override)
-        pending = any(row["qualifies"] is None for row in records)
+            for decision in override if isinstance(override, list) else [override]:
+                apply_override(study, component, records, decision)
+        classify_uncertainty(study, records, bool(rules.get("supplementary_audit")))
+        pending = any(
+            row["qualifies"] is None and row["blocks_event"] for row in records
+        )
         positive_times = [
             row["first_event_time"] for row in records if row["qualifies"] == 1
         ]
@@ -931,6 +1047,13 @@ def evaluate(
                 ),
                 f"{component}_event_status": status,
                 f"{component}_baseline_status": state,
+                f"{component}_first_event_time_status": (
+                    "unresolved"
+                    if pending
+                    else "earliest_confirmed"
+                    if positive_times
+                    else "no_confirmed_event"
+                ),
             }
         )
         output += records
