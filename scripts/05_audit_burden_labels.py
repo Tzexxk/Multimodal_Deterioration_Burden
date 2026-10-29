@@ -26,9 +26,16 @@ def main() -> int:
         )
     parser.add_argument("--mode", choices=("audit", "freeze"), default="audit")
     parser.add_argument("--decision-review", type=Path)
+    parser.add_argument(
+        "--review-only",
+        action="store_true",
+        help="Collect unfrozen evidence without applying versioned decisions; cannot freeze",
+    )
     args = parser.parse_args()
     if (args.mode == "freeze") != bool(args.decision_review):
         parser.error("--decision-review is required only in freeze mode")
+    if args.review_only and args.mode != "audit":
+        parser.error("--review-only is available only in audit mode")
     if args.mode == "freeze":
         return freeze_endpoint(
             ROOT,
@@ -44,6 +51,7 @@ def main() -> int:
             getattr(args, name).resolve()
             for name in ("paths", "cohort", "ehr", "imaging")
         ),
+        review_only=args.review_only,
     )
 
 

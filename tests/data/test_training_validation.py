@@ -32,6 +32,53 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class TrainingValidationTests(unittest.TestCase):
+    def test_independent_five_fold_index_verification_and_tamper_rejection(self):
+        from test_patient_split import synthetic_cohort
+        from src.cohort.create_patient_split import allocate_patients, CV_ALGORITHM, select_fold
+        cohort = synthetic_cohort(n=24, high=12, phys=12)
+        settings = dict(algorithm_version=CV_ALGORITHM, cohort_version="burden_v2_h72_r01",
+                        split_version="burden_v2_h72_r01_split_v2", seed=42)
+        patients, quotas = allocate_patients(cohort, settings)
+        by_id = {r["subject_id"]: r["split"] for r in patients.to_pylist()}
+        samples = pa.Table.from_pylist([
+            {**r, "split": by_id[r["subject_id"]]}
+            for r in sorted(cohort.to_pylist(), key=lambda r: r["sample_id"])
+        ])
+        bundle = quotas["cross_validation"]
+        fold_tables = {fold: select_fold(patients, bundle, fold) for fold in range(1, 6)}
+        step.validate_cross_validation(cohort, patients, bundle, samples, fold_tables)
+        for kind in ("missing", "wrong_fold", "duplicate", "metadata"):
+            with self.subTest(fold_table=kind):
+                bad_tables = dict(fold_tables)
+                if kind == "missing":
+                    bad_tables.pop(5)
+                elif kind == "wrong_fold":
+                    bad_tables[5] = fold_tables[1]
+                else:
+                    rows = fold_tables[5].to_pylist()
+                    if kind == "duplicate":
+                        rows[-1] = rows[0]
+                    else:
+                        rows[0]["seed"] = 99
+                    bad_tables[5] = pa.Table.from_pylist(rows, schema=patients.schema)
+                with self.assertRaises(ValueError):
+                    step.validate_cross_validation(cohort, patients, bundle, samples, bad_tables)
+        for kind in ("test", "order", "fold", "label", "train"):
+            with self.subTest(kind=kind):
+                bad = copy.deepcopy(bundle)
+                if kind == "test":
+                    bad["test_indices"].append(bad["test_indices"][0])
+                elif kind == "order":
+                    bad["master"][0]["sample_id"] = "incorrect"
+                elif kind == "fold":
+                    bad["folds"].pop()
+                elif kind == "label":
+                    bad["master"][0]["high_burden"] ^= 1
+                else:
+                    bad["folds"][0]["train_indices"] = bad["folds"][0]["validation_indices"]
+                with self.assertRaises(ValueError):
+                    step.validate_cross_validation(cohort, patients, bad, samples)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="synthetic_step12_")
         self.addCleanup(temporary.cleanup)
@@ -916,7 +963,9 @@ class TrainingValidationTests(unittest.TestCase):
                 self.root, self.args, self.settings, self.processed, self.outputs
             )
 
-    def prepare_provenance(self, supplementary=False):
+    def prepare_provenance(
+        self, supplementary=False, review_sources=False, pending_reviews=0, vital_scope=None
+    ):
         from src.cohort import create_patient_split, freeze_cohort
         from src.data import export_training_package
         from src.ehr import build_ehr_features, step10b
@@ -972,12 +1021,15 @@ class TrainingValidationTests(unittest.TestCase):
                 "feature_set_version",
             )
         }
+        lab_config={"audit_version": "lab_audit_v1"}
+        if vital_scope is not None:
+            lab_config.update(reviewer="ZE Xiaokang",vital_audit={"items":{"220045":"Heart Rate"}})
         for name, content in dict(
             cohort={},
             ehr={"burden_v2": {"tables": {}}},
             imaging={},
             split_config=self.split_settings,
-            lab_config={"audit_version": "lab_audit_v1"},
+            lab_config=lab_config,
             feature_config={"audit_version": "ehr_audit_v1"},
             export_config=export_settings,
         ).items():
@@ -1073,6 +1125,7 @@ class TrainingValidationTests(unittest.TestCase):
             dict(
                 source_binding=lab_binding,
                 audit_fingerprint="synthetic",
+                **({"vital_audit":{"features_approved":False}} if vital_scope is not None else {}),
                 cache_paths=dict(
                     labs=str(self.lab_path), admissions=str(self.lab_admissions_path)
                 ),
@@ -1093,6 +1146,19 @@ class TrainingValidationTests(unittest.TestCase):
                 code_sha256=build_ehr_features.code_hash(),
             ),
         )
+        if vital_scope is not None:
+            self.scope_path=save(self.root / "feature_scope.json",dict(
+                vital_feature_scope=vital_scope,audit_fingerprint="synthetic",
+                audit_manifest_sha256=_file_hash(self.files["lab_audit"]),
+                reviewer="ZE Xiaokang",reviewed_on="2026-10-29",review_version="synthetic_scope_v1",
+                rationale="User excluded vital features",cohort_version=cohort_version,
+                split_version=split_version,retained_lab_itemids=["1"],excluded_vital_itemids=["220045"],
+                static_features_unchanged=True,no_study_excluded_for_missing_features=True,
+                pending_raw_vital_issues_resolved=False))
+            dictionary_freeze["source_binding"]["feature_scope_review"]={
+                "path":str(self.scope_path),"sha256":_file_hash(self.scope_path),
+                "vital_feature_scope":vital_scope}
+            dictionary_freeze["source_binding"]["review_files_sha256"][str(self.scope_path)]=_file_hash(self.scope_path)
         save(self.files["dictionary_freeze"], dictionary_freeze)
         dictionary_snapshot = (
             data
@@ -1194,6 +1260,53 @@ class TrainingValidationTests(unittest.TestCase):
                     }
                 },
             )
+        review_bindings, review_artifact = {}, None
+        if review_sources:
+            source_root = Path(json.loads(self.args.paths.read_text())["mimic_iv"])
+            if not source_root.is_absolute():
+                source_root = self.root / source_root
+            source = source_root / "icu/review_inputevents.csv"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(
+                "subject_id,hadm_id,starttime\n1,10,2120-01-01 12:00:00\n",
+                encoding="utf-8",
+            )
+            self.review_source = source
+            review_bindings = {
+                "inputevents_full": {
+                    "path": str(source),
+                    "version": _file_version(source),
+                    "columns": ["subject_id", "hadm_id", "starttime"],
+                }
+            }
+            save(
+                self.args.ehr,
+                {
+                    "burden_v2": {
+                        "tables": {},
+                        "review_evidence_sources": {
+                            "inputevents_full": "icu/review_inputevents.csv"
+                        },
+                    }
+                },
+            )
+            artifact = save(
+                self.processed / "cohort/burden_v2/review_source_records.parquet",
+                pa.Table.from_pylist(
+                    [
+                        dict(
+                            subject_id=1,
+                            hadm_id=10,
+                            raw_evidence="synthetic reviewed source",
+                        )
+                    ]
+                ),
+            )
+            self.files["review_source_artifact"] = artifact
+            review_artifact = {
+                "path": artifact.relative_to(self.root).as_posix(),
+                "sha256": _file_hash(artifact),
+            }
         for n in range(1, 12):
             with _OutputRun(self.outputs, n) as run:
                 run.path(self.outputs / f"synthetic_step_{n}.txt").write_text(
@@ -1202,7 +1315,18 @@ class TrainingValidationTests(unittest.TestCase):
                 if supplementary and n == 5:
                     save(
                         run.path(audit / "run_metadata.json"),
-                        dict(run_id=run.run_id, input_versions={}, **decisions),
+                        dict(
+                            run_id=run.run_id,
+                            input_versions={},
+                            review_evidence_sources=review_bindings,
+                            review_source_artifact=review_artifact,
+                            review_evidence_only=False,
+                            pending_review_decisions={
+                                "cohort": 0,
+                                "event": pending_reviews,
+                            },
+                            **decisions,
+                        ),
                     )
         if supplementary:
             from src.cohort.audit_burden_labels import save_audit_snapshot
@@ -1226,6 +1350,8 @@ class TrainingValidationTests(unittest.TestCase):
             endpoint = json.loads(self.files["endpoint_decision"].read_text())
             endpoint.update(
                 **decisions,
+                review_evidence_sources=review_bindings,
+                review_source_artifact=review_artifact,
                 review_snapshot_bindings=snapshot_bindings,
                 review_records_sha256={
                     review.relative_to(self.root).as_posix(): _file_hash(review)
@@ -1286,6 +1412,20 @@ class TrainingValidationTests(unittest.TestCase):
                     "Complete synthetic audit/build marker"
                 )
 
+    def test_complete_chain_reads_string_scope_path_and_rejects_tampering(self):
+        self.prepare_provenance(vital_scope="exclude_all")
+        self.assertEqual(step.run_validation(self.root,self.args),0)
+        self.scope_path.write_text("{}")
+        self.assertEqual(step.run_validation(self.root,self.args),1)
+        report=json.loads((self.outputs / "audit/burden_v2/training_package_acceptance.json").read_text())
+        self.assertEqual(report["checks"]["provenance"]["status"],"fail")
+
+    def test_complete_chain_rejects_unapproved_vital_policy(self):
+        self.prepare_provenance(vital_scope="include")
+        self.assertEqual(step.run_validation(self.root,self.args),1)
+        report=json.loads((self.outputs / "audit/burden_v2/training_package_acceptance.json").read_text())
+        self.assertIn("Invalid feature exclusion scope",report["checks"]["provenance"]["detail"])
+
     def test_complete_synthetic_frozen_chain_without_mocked_provenance(self):
         self.prepare_provenance()
         self.assertEqual(step.run_validation(self.root, self.args), 0)
@@ -1317,9 +1457,28 @@ class TrainingValidationTests(unittest.TestCase):
         )
         self.assertEqual(step.run_validation(self.root, self.args), 1)
 
+    def test_r02_supplemental_sources_pass_then_reject_raw_or_artifact_tampering(self):
+        self.prepare_provenance(supplementary=True, review_sources=True)
+        self.assertEqual(step.run_validation(self.root, self.args), 0)
+        artifact = self.files["review_source_artifact"]
+        original = artifact.read_bytes()
+        artifact.write_text("tampered evidence\n", encoding="utf-8")
+        self.assertEqual(step.run_validation(self.root, self.args), 1)
+        artifact.write_bytes(original)
+        self.assertEqual(step.run_validation(self.root, self.args), 0)
+        self.review_source.write_text("tampered raw source\n", encoding="utf-8")
+        self.assertEqual(step.run_validation(self.root, self.args), 1)
+
+    def test_r02_pending_review_decisions_cannot_pass_acceptance(self):
+        self.prepare_provenance(supplementary=True, pending_reviews=1)
+        self.assertEqual(step.run_validation(self.root, self.args), 1)
+
     def test_configuration_and_empty_failure_headers(self):
+        unfilled=copy.deepcopy(self.settings)
+        unfilled["expected_counts"]={k:None for k in unfilled["expected_counts"]}
+        step.write_json(self.args.validation_config,unfilled)
         with self.assertRaises(ValueError):
-            step.load_settings(ROOT / "configs/training_validation_r02.json")
+            step.load_settings(self.args.validation_config)
         settings = copy.deepcopy(self.settings)
         settings["relocation_policy"] = "skip"
         step.write_json(self.args.validation_config, settings)

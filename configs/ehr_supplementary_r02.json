@@ -1,0 +1,108 @@
+{
+  "burden_v2": {
+    "memory_limit": "2GB",
+    "tables": {
+      "patients": "hosp/patients.csv",
+      "admissions": "hosp/admissions.csv",
+      "transfers": "hosp/transfers.csv",
+      "icustays": "icu/icustays.csv",
+      "d_items": "icu/d_items.csv",
+      "procedureevents": "icu/procedureevents.csv",
+      "chartevents": "icu/chartevents.csv",
+      "emar": "hosp/emar.csv",
+      "emar_detail": "hosp/emar_detail.csv",
+      "pharmacy": "hosp/pharmacy.csv",
+      "prescriptions": "hosp/prescriptions.csv"
+    },
+    "review_evidence_sources": {
+      "inputevents_full": "icu/inputevents.csv",
+      "ingredientevents_full": "icu/ingredientevents.csv",
+      "poe_full": "hosp/poe.csv",
+      "poe_detail_full": "hosp/poe_detail.csv",
+      "pharmacy_full": "hosp/pharmacy.csv",
+      "prescriptions_full": "hosp/prescriptions.csv",
+      "emar_full": "hosp/emar.csv",
+      "emar_detail_full": "hosp/emar_detail.csv",
+      "discharge_notes_full": "note/discharge.csv"
+    }
+  },
+  "raw_audit": {
+    "lab_sample_rows": 10000,
+    "lab_time_fields": [
+      "charttime",
+      "storetime"
+    ],
+    "required_tables": {
+      "patients": {
+        "path": "hosp/patients.csv",
+        "columns": [
+          "subject_id",
+          "anchor_age",
+          "anchor_year"
+        ]
+      },
+      "admissions": {
+        "path": "hosp/admissions.csv",
+        "columns": [
+          "subject_id",
+          "hadm_id",
+          "admittime",
+          "dischtime",
+          "deathtime"
+        ]
+      },
+      "transfers": {
+        "path": "hosp/transfers.csv",
+        "columns": [
+          "subject_id",
+          "hadm_id",
+          "careunit",
+          "intime",
+          "outtime"
+        ]
+      },
+      "icustays": {
+        "path": "icu/icustays.csv",
+        "columns": [
+          "subject_id",
+          "hadm_id",
+          "stay_id",
+          "intime",
+          "outtime"
+        ]
+      },
+      "labevents": {
+        "path": "hosp/labevents.csv",
+        "columns": [
+          "subject_id",
+          "hadm_id",
+          "itemid",
+          "charttime",
+          "storetime",
+          "valuenum",
+          "valueuom",
+          "specimen_id"
+        ]
+      },
+      "d_labitems": {
+        "path": "hosp/d_labitems.csv",
+        "columns": [
+          "itemid",
+          "label",
+          "fluid",
+          "category"
+        ]
+      },
+      "services": {
+        "path": "hosp/services.csv",
+        "columns": [
+          "subject_id",
+          "hadm_id",
+          "transfertime",
+          "prev_service",
+          "curr_service"
+        ]
+      }
+    }
+  }
+}

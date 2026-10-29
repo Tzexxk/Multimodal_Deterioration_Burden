@@ -2,7 +2,7 @@
   "interface_version": "1.0",
   "release_id": "burden_v2_h72_r02",
   "cohort_version": "burden_v2_h72_r02",
-  "split_version": "burden_v2_h72_r02_split_v1",
+  "split_version": "burden_v2_h72_r02_split_v3",
   "dictionary_version": "lab_dictionary_r02",
   "feature_set_version": "ehr_features_r02"
 }

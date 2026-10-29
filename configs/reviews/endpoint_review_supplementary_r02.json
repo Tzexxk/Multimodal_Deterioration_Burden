@@ -1,0 +1,41 @@
+{
+  "confirmed": true,
+  "review_status": "HUMAN_REVIEW_APPROVED_AWAITING_USER_FREEZE_COMMAND",
+  "decision_version": "burden_v2_h72_r02_endpoint_v1",
+  "reviewer": "ZE Xiaokang",
+  "reviewed_on": "2026-10-29",
+  "horizon_hours": 72,
+  "rationale": "User-approved endpoint freeze for the latest normal r02 audit:686 complete pre-QC studies,408 admissions,285 patients;851 excluded, including the841 protected exclusions and the six explicitly user-excluded unresolved studies. Preserve six pending history records without zero labels. Keep the six-event definitions, new-start requirement,SpO2<=85%,(t0,min(t0+72h,dischtime)] window,target-drug set,weights and domain caps. QC,common-cohort freeze,splits,feature building,export and independent Step12 acceptance remain required. Human explicitly reviewed and approved this endpoint record on2026-10-29: proceed to the next step.",
+  "rules_revision": "burden_v2_audit_v19",
+  "source_run_id": "dac80b38454b49a289881edc67a34de7",
+  "source_manifest_sha256": "a7a761d903b22cd3e3863f9e17f2473ba6dda1fa4f4089731e1f47254351463f",
+  "review_records": [
+    "docs/codex/SUPPLEMENTARY_COHORT_AUDIT_GUIDANCE_2026-10-06_ZH.md",
+    "configs/reviews/difficult_sample_cohort_decisions_2026-10-06_v1.csv",
+    "configs/reviews/difficult_sample_event_decisions_2026-10-06_v1.csv",
+    "configs/reviews/event_evidence_reviews_2026-10-04_v1.csv",
+    "configs/reviews/candidate_exclusions_2026-10-04_v5.csv",
+    "outputs/supplementary_r02/audit/burden_v2/review_batches/endpoint_readiness_2026-10-29/verification_summary.json",
+    "outputs/supplementary_r02/audit/burden_v2/review_batches/final_binding_after_pending_exclusion_2026-10-29/activation_receipt.json",
+    "outputs/supplementary_r02/audit/burden_v2/review_batches/pending6_exclusion_2026-10-29/exclusion_activation_receipt.json"
+  ],
+  "proposed_counts": {
+    "eligible_studies": 686,
+    "eligible_admissions": 408,
+    "eligible_patients": 285,
+    "nonzero_studies": 60,
+    "phys_death_studies": 35,
+    "high_burden_studies": 33,
+    "unresolved_studies": 0
+  },
+  "proposed_score_distribution": {
+    "0": 626,
+    "1": 25,
+    "5": 10,
+    "2": 2,
+    "3": 20,
+    "8": 3
+  },
+  "clinical_rules_changed_by_endpoint_review": false,
+  "human_confirmation": "审阅通过，可以进入下一步了"
+}

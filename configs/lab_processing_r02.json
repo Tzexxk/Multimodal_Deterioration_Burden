@@ -1,8 +1,8 @@
 {
-  "audit_version": "lab_audit_r02",
+  "audit_version": "lab_audit_r02_v2",
   "algorithm_version": "lab_audit_review_v1",
   "cohort_version": "burden_v2_h72_r02",
-  "split_version": "burden_v2_h72_r02_split_v1",
+  "split_version": "burden_v2_h72_r02_split_v3",
   "lookback_hours": 24,
   "memory_limit": "2GB",
   "batch_item_limit": 10,
@@ -13,5 +13,25 @@
     "d_labitems": "hosp/d_labitems.csv",
     "labevents": "hosp/labevents.csv",
     "admissions": "hosp/admissions.csv"
+  },
+  "vital_audit": {
+    "tables": {
+      "chartevents": "icu/chartevents.csv",
+      "d_items": "icu/d_items.csv",
+      "icustays": "icu/icustays.csv"
+    },
+    "items": {
+      "220045": "Heart Rate",
+      "220050": "Arterial Blood Pressure systolic",
+      "220051": "Arterial Blood Pressure diastolic",
+      "220052": "Arterial Blood Pressure mean",
+      "220179": "Non Invasive Blood Pressure systolic",
+      "220180": "Non Invasive Blood Pressure diastolic",
+      "220181": "Non Invasive Blood Pressure mean",
+      "220210": "Respiratory Rate",
+      "223761": "Temperature Fahrenheit",
+      "223762": "Temperature Celsius",
+      "220277": "O2 saturation pulseoxymetry"
+    }
   }
 }

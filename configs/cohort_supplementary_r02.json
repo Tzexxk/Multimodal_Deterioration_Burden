@@ -10,8 +10,8 @@
       72
     ],
     "minimum_age": 18,
-    "rules_version": "burden_v2_audit_v18",
-    "dictionary_version": "burden_supplementary_2026_10_08_v1",
+    "rules_version": "burden_v2_audit_v19",
+    "dictionary_version": "burden_supplementary_2026_10_29_identity_v2",
     "dictionary_handling_reviews": {
       "careunits": {
         "UNKNOWN": {
@@ -55,6 +55,270 @@
           "reviewed_on": "2026-10-04",
           "version": "dictionary_handling_review_2026-10-04_v1",
           "rationale": "SW does not establish drug identity. Preserve the unknown identity and apply existing administration, study exclusion and clinical review rules. Do not infer a drug or diluent identity from this abbreviation."
+        },
+        "0.83% sodium chloride": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "0.9% sodium chloride (excel bag)": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "0.9% sodium chloride (mini bag plus)": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "0.9% sodium chloride p.f. (syringe)": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "1": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "2": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "300 mcg vial": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "5 syringes (ns)": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "5% dextrose (excel bag)": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "acetaminophen drug": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "bottle": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "click change <--- to choose a base solution": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "coq10 (300mg)": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "d5w": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "inv-acetaminophen": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "inv-dexmedetomidine": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "iso-osmotic dextrose": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "iso-osmotic sodium chloride": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "morph": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "morphin": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "ns": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "ns syringe (intrapleural)": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "phytonadi": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "soln": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "sterile water": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "syringe": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "syringe (0.9% sodium chloride)": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "syringe (chemo)": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "syringe (iso-osmotic dextrose)": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "terlipressin": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "terlipressin ication": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "vial": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
+        },
+        "yellow cadd cassette": {
+          "handling_confirmed": true,
+          "handling": "preserve_unknown",
+          "reviewer": "Codex (implementation of the user-confirmed preserve-unknown audit policy)",
+          "reviewed_on": "2026-10-28",
+          "version": "dictionary_unknown_handling_supplementary_2026-10-28_v1",
+          "rationale": "Retain this exact inventory value as unidentified under the user-confirmed supplementary audit guidance sections 4.1, 4.2 and 6. No drug identity, target/non-target classification, actual administration, onset, eligibility or event label is approved by this handling record. Apply only separately confirmed, evidence-bound sample decisions; any remaining relevant uncertainty blocks a complete label. Automated preparation by Codex; this is not a new clinical review by the human reviewer."
         }
       }
     },
@@ -3826,6 +4090,195 @@
         "confirmed": false,
         "reviewer": "ZE Xiaokang",
         "mapping_reason": "Reviewer confirmed the handling policy on 2026-10-04: do not automatically exclude blank medication names or infer identity from infusion type; identity remains unresolved and potentially qualifying infusion records require review. confirmed remains false because medication identity is unverified, not because the handling policy lacks approval"
+      },
+      "*nf* ertapenem sodium": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "acetazolamide sodium": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "albumin": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "alteplase (catheter clearance)": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "ampicillin sodium": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "centrum silver multivitamin": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "chlorothiazide sodium": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "ciprofloxacin iv": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "dexamethasone sod phosphate": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "gammagard liquid": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "heparin sodium": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "hydromorphone": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "insulin human regular": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "irinotecan": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "leucovorin calcium": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "nicardipine iv": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "oxaliplatin": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "phenytoin sodium": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "symbicort 160mcg/4.5mcg": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "talc (sterile)": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
+      },
+      "tetrabenazine (xenazine)": {
+        "canonical_drug": null,
+        "confirmed": true,
+        "reviewer": "ZE Xiaokang",
+        "reviewed_on": "2026-10-29",
+        "version": "burden_supplementary_2026_10_29_identity_v2",
+        "mapping_reason": "User explicitly confirmed on 2026-10-29 the stage02 proposal for this exact normalized name as a non-target component within the fixed six-drug set. This mapping does not classify an entire mixture, establish actual IV administration or new onset, grant enrollment, or change existing component decisions.",
+        "source_review_path": "outputs/supplementary_r02/audit/burden_v2/review_batches/stage02_identity_inventory_2026-10-29_022030/identity_mapping_proposal.json"
       }
     },
     "administration_types": {

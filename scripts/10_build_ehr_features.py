@@ -39,6 +39,8 @@ def main() -> int:
         "--dictionary-version",
         help="Required immutable dictionary identity in freeze mode",
     )
+    parser.add_argument("--feature-scope-review", type=Path,
+                        help="Reviewed JSON explicitly excluding all audited vital-sign features")
     args = parser.parse_args()
     if args.mode != "audit" and not args.reviews:
         parser.error("review and freeze modes require --reviews")
@@ -48,6 +50,8 @@ def main() -> int:
         parser.error("--dictionary-version is only valid in freeze mode")
     if args.mode == "audit" and args.reviews:
         parser.error("audit mode does not accept review decisions")
+    if args.mode == "audit" and args.feature_scope_review:
+        parser.error("feature-scope-review applies to review and freeze modes")
     return run_step10(
         ROOT,
         args.mode,
@@ -57,6 +61,7 @@ def main() -> int:
         args.lab_config.resolve(),
         [p.resolve() for p in args.reviews or []],
         args.dictionary_version,
+        args.feature_scope_review.resolve() if args.feature_scope_review else None,
     )
 
 

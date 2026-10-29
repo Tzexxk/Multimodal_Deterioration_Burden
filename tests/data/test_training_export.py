@@ -31,6 +31,32 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class TrainingExportTests(unittest.TestCase):
+    def test_export_reconstructs_all_audit_sources_even_when_vital_features_are_excluded(self):
+        lab_settings = dict(audit_version="synthetic_audit", tables={
+            "d_labitems":"hosp/d_labitems.csv", "labevents":"hosp/labevents.csv",
+            "admissions":"hosp/admissions.csv"})
+        for include_vital_audit in (False,True):
+            with self.subTest(include_vital_audit=include_vital_audit):
+                settings=dict(lab_settings)
+                if include_vital_audit:
+                    settings["vital_audit"]={"tables":{k:f"icu/{k}.csv" for k in
+                                                           ("chartevents","d_items","icustays")}}
+                with (patch.object(step.upstream,"verify_frozen_inputs",return_value=self.context),
+                      patch.object(step,"_verify_run"),
+                      patch.object(step.ehr,"load_settings",return_value={"audit_version":"synthetic_ehr"}),
+                      patch.object(step.upstream,"dictionary_releases"),
+                      patch.object(step.upstream,"load_settings",return_value=settings),
+                      patch.object(step,"_json_file",return_value={"mimic_iv":str(self.root / "iv")}),
+                      patch.object(step.upstream,"source_binding",side_effect=RuntimeError("binding captured")) as capture):
+                    with self.assertRaisesRegex(RuntimeError,"binding captured"):
+                        step.verify_inputs(self.root,self.args,self.settings)
+                sources=capture.call_args.args[1]
+                expected=set(lab_settings["tables"])
+                if include_vital_audit:
+                    expected|={"chartevents","d_items","icustays"}
+                self.assertEqual(set(sources),expected)
+                self.assertTrue(all(path.is_absolute() for path in sources.values()))
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="synthetic_training_export_")
         self.addCleanup(temporary.cleanup)
@@ -204,6 +230,31 @@ class TrainingExportTests(unittest.TestCase):
     @property
     def archive(self):
         return self.package.with_suffix(".zip")
+
+    def test_five_fold_tables_export_once_with_shared_images_and_features(self):
+        sources = self.context["source_files"]
+        sources["cross_validation"] = self.root / "cross_validation_indices.json"
+        sources["cross_validation"].write_text(json.dumps({"synthetic": True}))
+        for fold in range(1, 6):
+            path = self.root / f"patient_split_fold_{fold}.parquet"
+            shutil.copyfile(sources["split"], path)
+            sources[f"cv_fold_{fold}"] = path
+        self.context["source_hashes_export"] = {k: _file_hash(v) for k, v in sources.items()}
+        self.run_export()
+        meta = json.loads((self.package / "dataset_metadata.json").read_text())
+        for fold in range(1, 6):
+            relative = f"splits/fold_{fold}/patient_split.parquet"
+            self.assertEqual(_file_hash(self.package / relative), _file_hash(sources[f"cv_fold_{fold}"]))
+            self.assertIn(relative, meta["file_sha256"])
+            self.assertIn(relative, meta["cross_validation"]["patient_split_files"])
+            with zipfile.ZipFile(self.archive) as archive:
+                self.assertIn(f"{self.settings['release_id']}/{relative}", archive.namelist())
+        self.assertEqual(len(list(self.package.rglob("ehr_features.parquet"))), 1)
+        self.assertEqual(len(list(self.package.rglob("*.npy"))), self.cohort.num_rows)
+        self.run_export()
+        (self.package / "splits/fold_5/patient_split.parquet").write_bytes(b"corrupt")
+        with self.assertRaises(ValueError):
+            self.run_export()
 
     def test_export_reuse_and_relocated_loading(self):
         self.run_export()

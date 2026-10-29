@@ -299,6 +299,16 @@ def ventilation_evidence(study: dict, context: dict) -> list[dict]:
             else "not_observed"
         )
         reason = row["reason"]
+        if (
+            not reason
+            and baseline == "active_documented"
+            and any(
+                in_window(study, segment["start"])
+                for segment in row.get("raw_records", [])
+            )
+        ):
+            # Merging adjacent orders must not hide a possible restart after t0.
+            reason = "segmented_ventilation_onset_requires_review"
         qualifies = None if reason else int(in_window(study, start))
         if reason == "excluded_noninvasive_or_cancelled":
             qualifies = 0
@@ -316,22 +326,80 @@ def ventilation_evidence(study: dict, context: dict) -> list[dict]:
                 baseline,
             )
         )
+    new_direct = any(row["qualifies"] == 1 for row in result)
     for row in context["chartevents"]:
         if str(row["itemid"]) == "220277":
             continue
         time = clinical_time(row["charttime"])
-        if time is not None and not in_window(study, time):
+        if time is not None and time > study["observation_end"]:
+            continue
+        owner = ownership(row, context["admission"], context["admissions"], time)
+        if owner == "other_admission":
+            continue
+        label = context.get("chart_item_labels", {}).get(str(row["itemid"]), "")
+        oxygen_device_only = label.lower().startswith("o2 delivery device") and (
+            str(row.get("value") or "").strip().casefold()
+            not in {"endotracheal tube", "ett", "tracheostomy tube"}
+        )
+        raw = {
+            **row,
+            "source_record_key": row.get("source_record_key")
+            or record_key("chartevents", row),
+            "item_label": label,
+            "clinical_onset_confirmed_by_chart": False,
+        }
+        if time is not None and time <= study["t0"]:
+            ended = any(
+                not episode["reason"]
+                and episode["start"] <= time <= episode["end"] <= study["t0"]
+                for episode in context["ventilation_episodes"]
+            )
+            # Historical charts are review cues, never proof of continuous IMV.
+            blocks = new_direct and not ended and not oxygen_device_only
+            result.append(
+                evidence(
+                    study,
+                    COMPONENTS[2],
+                    "chartevents",
+                    raw,
+                    time,
+                    None if blocks else 0,
+                    (owner or "baseline_ventilation_onset_conflict")
+                    if blocks
+                    else "historical_airway_context",
+                )
+            )
+            continue
+        if oxygen_device_only:
+            result.append(
+                evidence(
+                    study,
+                    COMPONENTS[2],
+                    "chartevents",
+                    raw,
+                    time,
+                    0,
+                    "oxygen_device_context_only",
+                )
+            )
             continue
         covered = time is not None and any(
             not episode["reason"] and episode["start"] <= time <= episode["end"]
             for episode in context["ventilation_episodes"]
         )
+        raw["onset_dependency_keys"] = [
+            episode["source_record_key"]
+            for episode in context["ventilation_episodes"]
+            if time is not None
+            and not episode["reason"]
+            and episode["start"] <= time <= episode["end"]
+        ]
         result.append(
             evidence(
                 study,
                 COMPONENTS[2],
                 "chartevents",
-                row,
+                raw,
                 time,
                 0 if covered else None,
                 "direct_episode_crosscheck" if covered else "indirect_ventilation_only",
@@ -354,7 +422,7 @@ def hypoxemia_evidence(study: dict, context: dict, rules: dict) -> list[dict]:
     groups = defaultdict(list)
     for row in records:
         groups[clinical_time(row["charttime"])].append(row)
-    states, baseline_states, result = {}, {}, []
+    states, baseline_states, state_keys, result = {}, {}, {}, []
     item = confirmed(rules["items"], "220277")
     threshold = rules["spo2_threshold"]
     for time, group in groups.items():
@@ -368,6 +436,7 @@ def hypoxemia_evidence(study: dict, context: dict, rules: dict) -> list[dict]:
             valid_values and min(valid_values) <= threshold < max(valid_values)
         )
         updates = {}
+        update_keys = defaultdict(list)
         for row in group:
             stay = identifier(row["stay_id"])
             active_at_t0 = any(
@@ -410,10 +479,13 @@ def hypoxemia_evidence(study: dict, context: dict, rules: dict) -> list[dict]:
                     and previous is not True
                 )
             )
+            if rules.get("supplementary_audit") and qualifies == 1 and previous is None:
+                qualifies, reason = None, "hypoxemia_onset_not_established"
             if reason == "invalid_spo2_value":
                 qualifies = 0
-            if not reason:
+            if not reason or reason == "hypoxemia_onset_not_established":
                 updates[stay] = value <= threshold
+                update_keys[stay].append(row["source_record_key"])
                 if time and time <= study["t0"]:
                     baseline_states[stay] = value <= threshold
                     baseline = (
@@ -421,14 +493,25 @@ def hypoxemia_evidence(study: dict, context: dict, rules: dict) -> list[dict]:
                         if value <= threshold
                         else "inactive_documented"
                     )
-                if value <= threshold and previous is True:
+                if not reason and value <= threshold and previous is True:
                     reason = "preexisting_support"
             result.append(
                 evidence(
                     study,
                     COMPONENTS[3],
                     "chartevents",
-                    row,
+                    {
+                        **row,
+                        "source_record_key": row.get("source_record_key")
+                        or record_key("chartevents", row),
+                        "previous_valid_low_state": previous,
+                        "onset_dependency_keys": state_keys.get(stay, []),
+                        "new_onset_basis": "preceding_valid_nonlow"
+                        if previous is False
+                        else "not_established"
+                        if previous is None
+                        else "ongoing_low",
+                    },
                     time,
                     qualifies,
                     reason,
@@ -436,6 +519,7 @@ def hypoxemia_evidence(study: dict, context: dict, rules: dict) -> list[dict]:
                 )
             )
         states.update(updates)
+        state_keys.update(update_keys)
     return result
 
 
@@ -665,11 +749,15 @@ def aggregate_medications(
             for row in group:
                 row["reason"] = row["reason"] or "simultaneous_infusion_records"
     active, episode_starts = {}, {}
+    state_keys, episode_keys = {}, {}
     for row in events:
         drug = row["canonical_drug"]
         row["onset"] = None
         row["active_before"] = active.get(drug)
         row["episode_start_before"] = episode_starts.get(drug)
+        row["onset_dependency_keys"] = sorted(
+            {key for key in (state_keys.get(drug), episode_keys.get(drug)) if key}
+        )
         if row["reason"] or row["time"] is None:
             row["reason"] = row["reason"] or "invalid_medication_time"
             continue
@@ -688,10 +776,12 @@ def aggregate_medications(
                 row["onset"] = True
                 active[drug] = True
                 episode_starts[drug] = row["time"]
+                episode_keys[drug] = row["source_record_key"]
         elif action == "stop":
             row["onset"] = False
             active[drug] = False
             episode_starts.pop(drug, None)
+            episode_keys.pop(drug, None)
         elif action in {"continue", "given"}:
             if (
                 active.get(drug) is True
@@ -707,6 +797,9 @@ def aggregate_medications(
         if row.get("completed"):
             active[drug] = False
             episode_starts.pop(drug, None)
+            episode_keys.pop(drug, None)
+        if not row["reason"]:
+            state_keys[drug] = row["source_record_key"]
     return events
 
 
@@ -730,7 +823,7 @@ def infusion_evidence(study: dict, context: dict) -> list[dict]:
                     )
                 if row["action"] == "stop" or row.get("completed"):
                     baseline[drug] = "inactive_documented"
-            later_stop = any(
+            later_stop = drug is not None and any(
                 other["canonical_drug"] == drug
                 and not other["reason"]
                 and other["time"]
@@ -738,9 +831,23 @@ def infusion_evidence(study: dict, context: dict) -> list[dict]:
                 and (other["action"] == "stop" or other.get("completed"))
                 for other in context["medication_events"]
             )
-            if later_stop:
-                continue
-            if not row["reason"] and baseline.get(drug) != "active_documented":
+            if later_stop or (
+                not row["reason"] and baseline.get(drug) != "active_documented"
+            ):
+                result.append(
+                    evidence(
+                        study,
+                        COMPONENTS[4],
+                        "emar",
+                        row,
+                        time,
+                        0,
+                        "history_resolved_by_documented_stop"
+                        if later_stop
+                        else "historical_nonactive_medication_context",
+                        baseline.get(drug, "not_observed"),
+                    )
+                )
                 continue
         state = baseline.get(drug, "not_observed")
         reason = row["reason"]
@@ -763,7 +870,25 @@ def infusion_evidence(study: dict, context: dict) -> list[dict]:
             else:
                 reason = "preexisting_support"
         result.append(
-            evidence(study, COMPONENTS[4], "emar", row, time, qualifies, reason, state)
+            evidence(
+                study,
+                COMPONENTS[4],
+                "emar",
+                {
+                    **row,
+                    "onset_review_context": {
+                        "baseline_at_record": state,
+                        "documented_action": row["action"],
+                        "automated_onset": row["onset"],
+                        "actual_start_requires_history_review": row["onset"] is True
+                        and state == "not_observed",
+                    },
+                },
+                time,
+                qualifies,
+                reason,
+                state,
+            )
         )
     return result
 
@@ -788,7 +913,11 @@ def death_evidence(study: dict, context: dict) -> list[dict]:
 
 
 def apply_override(
-    study: dict, component: str, values: list[dict], override: dict
+    study: dict,
+    component: str,
+    values: list[dict],
+    override: dict,
+    supporting_records: list[dict] | None = None,
 ) -> None:
     if (
         not override.get("reviewer")
@@ -820,6 +949,14 @@ def apply_override(
     keys = json.loads(override.get("source_record_keys") or "[]")
     available = {key for row in values for key in json.loads(row["source_record_keys"])}
     available |= {row["source_record_key"] for row in values}
+    supporting = [
+        r
+        for r in (supporting_records or [])
+        if identifier(r.get("subject_id")) == study["subject_id"]
+        and identifier(r.get("hadm_id")) == study["hadm_id"]
+    ]
+    if component == COMPONENTS[4] and scope == "component":
+        available |= {r["source_record_key"] for r in supporting}
     if (
         not isinstance(keys, list)
         or not keys
@@ -852,6 +989,21 @@ def apply_override(
                     blocking_reason="",
                     uncertainty_relevance="reviewed_source_exclusion",
                 )
+        for row in values:
+            raw = json.loads(row["raw_evidence"])
+            if row["source_record_key"] not in keys and set(
+                raw.get("onset_dependency_keys", [])
+            ).intersection(keys):
+                row.update(
+                    qualifies=None,
+                    first_event_time=None,
+                    event_status="unresolved",
+                    review_status="pending",
+                    exclusion_reason="excluded_onset_dependency_requires_review",
+                    blocks_event=1,
+                    blocking_reason="excluded_onset_dependency_requires_review",
+                    uncertainty_relevance="excluded_onset_dependency",
+                )
         manual = evidence(
             study, component, "overrides", override, None, 0, "manual_source_exclusion"
         )
@@ -876,6 +1028,28 @@ def apply_override(
     }:
         raise ValueError("Invalid override baseline_status")
     for row in values:
+        # Keep determined negatives and their reasons. Replacing a non-target
+        # reason with manual_override would make history relevant on reclassification.
+        if row["qualifies"] == 0:
+            continue
+        row_keys = set(json.loads(row["source_record_keys"]))
+        covered = row["source_record_key"] in keys or (
+            bool(row_keys) and row_keys <= set(keys)
+        )
+        if (row["qualifies"] == 1 or row.get("blocks_event")) and not covered:
+            row.update(
+                qualifies=None,
+                first_event_time=None,
+                event_status="unresolved",
+                review_status="pending",
+                exclusion_reason="unreviewed_component_override_evidence",
+                blocks_event=1,
+                blocking_reason="component_override_does_not_cover_evidence",
+                uncertainty_relevance="unreviewed_by_component_override",
+            )
+            continue
+        if row["qualifies"] is None and not row.get("blocks_event"):
+            continue
         row.update(
             qualifies=0,
             first_event_time=None,
@@ -908,6 +1082,16 @@ def apply_override(
         automated_qualifies=None,
         automated_event_status="manual",
         automated_exclusion_reason="",
+        raw_evidence=json.dumps(
+            {
+                **override,
+                "supporting_records": [
+                    r for r in supporting if r["source_record_key"] in keys
+                ],
+            },
+            sort_keys=True,
+            default=str,
+        ),
     )
     values.append(manual)
 
@@ -926,7 +1110,10 @@ def classify_uncertainty(study: dict, records: list[dict], supplementary: bool) 
     }
     window_infusion = any(
         r["component"] == COMPONENTS[4]
-        and in_window(study, r["event_time"])
+        and (
+            in_window(study, r["event_time"])
+            or r["exclusion_reason"] == "supplemental_infusion_requires_review"
+        )
         and r["exclusion_reason"] != "excluded_medication_or_administration"
         for r in records
     )
@@ -935,12 +1122,32 @@ def classify_uncertainty(study: dict, records: list[dict], supplementary: bool) 
             row["blocks_event"] = 0
             row["blocking_reason"] = ""
             continue
+        if row["exclusion_reason"] == "unreviewed_component_override_evidence":
+            continue
+        # An override can remove the positive that previously made this independent.
+        row.update(
+            blocks_event=1,
+            blocking_reason=row["exclusion_reason"],
+            uncertainty_relevance="blocking",
+        )
         raw = json.loads(row["raw_evidence"])
         owns = (
             identifier(raw.get("subject_id")) == study["subject_id"]
             and identifier(raw.get("hadm_id")) == study["hadm_id"]
         )
         if (
+            row["component"] == COMPONENTS[3]
+            and row["exclusion_reason"] == "hypoxemia_onset_not_established"
+            and first is not None
+            and in_window(study, row["event_time"])
+            and owns
+        ):
+            row.update(
+                blocks_event=0,
+                blocking_reason="",
+                uncertainty_relevance="independent_confirmed_low_after_recovery",
+            )
+        elif (
             first is not None
             and row["event_time"] is not None
             and row["event_time"] > first
@@ -979,10 +1186,37 @@ def evaluate(
             study, context
         )
         values += death_evidence(study, context)
+        for raw in context.get("review_records", []):
+            if not raw["source_record_key"].startswith("inputevents_full:"):
+                continue
+            source = raw["record"]
+            start, end = (
+                clinical_time(source.get("starttime")),
+                clinical_time(source.get("endtime")),
+            )
+            if (
+                start
+                and end
+                and end >= start
+                and (start > study["observation_end"] or end <= study["t0"])
+            ):
+                continue
+            values.append(
+                evidence(
+                    study,
+                    COMPONENTS[4],
+                    "inputevents_full",
+                    raw,
+                    start,
+                    None,
+                    "supplemental_infusion_requires_review",
+                )
+            )
     result = {name: study[name] for name in EVENT_COLUMNS[:5]}
     output = []
     for component in COMPONENTS:
         records = [row for row in values if row["component"] == component]
+        classify_uncertainty(study, records, bool(rules.get("supplementary_audit")))
         override = overrides.get(
             (study["sample_id"], study["horizon_hours"], component)
         )
@@ -990,7 +1224,31 @@ def evaluate(
             if study["candidate_status"] != "eligible":
                 raise ValueError("Event overrides cannot bypass candidate eligibility")
             for decision in override if isinstance(override, list) else [override]:
-                apply_override(study, component, records, decision)
+                apply_override(
+                    study, component, records, decision, context.get("review_records")
+                )
+        for decision in context.get("pending_event_decisions", []):
+            if (
+                decision["sample_id"] == study["sample_id"]
+                and identifier(decision["horizon_hours"]) == study["horizon_hours"]
+                and decision["component"] == component
+            ):
+                raw = {
+                    **decision,
+                    "subject_id": study["subject_id"],
+                    "hadm_id": study["hadm_id"],
+                }
+                records.append(
+                    evidence(
+                        study,
+                        component,
+                        "pending_review",
+                        raw,
+                        None,
+                        None,
+                        "pending_review_decision",
+                    )
+                )
         classify_uncertainty(study, records, bool(rules.get("supplementary_audit")))
         pending = any(
             row["qualifies"] is None and row["blocks_event"] for row in records
@@ -1050,6 +1308,14 @@ def evaluate(
                 f"{component}_first_event_time_status": (
                     "unresolved"
                     if pending
+                    else "earliest_confirmed_possible_earlier"
+                    if positive_times
+                    and any(
+                        r["qualifies"] is None
+                        and r["event_time"] is not None
+                        and r["event_time"] < min(positive_times)
+                        for r in records
+                    )
                     else "earliest_confirmed"
                     if positive_times
                     else "no_confirmed_event"

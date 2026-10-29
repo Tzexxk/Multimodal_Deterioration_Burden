@@ -152,7 +152,7 @@ class LaboratoryTests(unittest.TestCase):
     def directory(self):
         return self.output / "audit/burden_v2/labs" / self.settings["audit_version"]
 
-    def run_mode(self, mode="audit", paths=None, version=None):
+    def run_mode(self, mode="audit", paths=None, version=None, scope=None):
         with patch.object(step, "verify_frozen_inputs", return_value=self.context):
             return step.run_step10(
                 self.root,
@@ -163,10 +163,97 @@ class LaboratoryTests(unittest.TestCase):
                 self.config,
                 paths or [],
                 version,
+                scope,
             )
 
     def record(self):
         return json.loads((self.directory / "lab_audit_manifest.json").read_text())
+
+    def test_joint_vital_audit_retains_evidence_and_never_approves_rules(self):
+        self.settings["vital_audit"] = dict(
+            tables={k: f"icu/{k}.csv" for k in ("chartevents", "d_items", "icustays")},
+            items={"220045": "Heart Rate", "220179": "Non Invasive Blood Pressure systolic"})
+        self.config.write_text(json.dumps(self.settings))
+        icu = self.raw / "icu"
+        icu.mkdir()
+        _write_csv(icu / "d_items.csv", ["itemid", "label", "linksto", "unitname"], [
+            dict(itemid=k,label=v,linksto="chartevents",unitname="bpm")
+            for k,v in self.settings["vital_audit"]["items"].items()])
+        _write_csv(icu / "icustays.csv", "subject_id hadm_id stay_id intime outtime".split(), [dict(
+            subject_id="1",hadm_id="10",stay_id="100",intime="2020-01-01 00:00:00",outtime="2020-01-03 00:00:00")])
+        row=dict(subject_id="1",hadm_id="10",stay_id="100",itemid="220045",
+                 charttime="2020-01-02 11:00:00",storetime="2020-01-02 11:30:00",
+                 value="80",valuenum="80",valueuom="bpm",warning="0")
+        cases=[row,row,{**row,"valuenum":"90","value":"90"},
+               {**row,"warning":""},{**row,"warning":"1"},
+               {**row,"storetime":"2020-01-02 12:30:00"},
+               {**row,"stay_id":"999"},{**row,"hadm_id":"99"},
+               {**row,"storetime":"2020-01-02 10:00:00"},
+               {**row,"charttime":"invalid"},{**row,"value":"<80"},
+               {**row,"value":"79"},{**row,"valueuom":"other"},
+               {**row,"charttime":"2020-01-03 11:00:00"}]
+        _write_csv(icu / "chartevents.csv", list(row), cases)
+        split_dir=self.processed / "splits/burden_v2"
+        split_dir.mkdir(parents=True)
+        for fold in range(1,6):
+            folder=split_dir / f"fold_{fold}"
+            folder.mkdir()
+            pq.write_table(pa.table({"subject_id":[1],"split":["train"]}),folder / "patient_split.parquet")
+        self.run_mode()
+        record=self.record()
+        self.assertFalse(record["vital_audit"]["features_approved"])
+        self.assertFalse(record["vital_audit"]["review_complete"])
+        evidence=pq.read_table(record["vital_audit"]["evidence_path"]).to_pylist()
+        self.assertEqual(len(evidence),22)
+        self.assertIn("unknown",{r["warning_status"] for r in evidence})
+        self.assertIn("future_storetime",{r["availability_status"] for r in evidence})
+        self.assertIn("storetime_before_charttime",{r["availability_status"] for r in evidence})
+        self.assertTrue(all(not r["screening_candidate"] for r in evidence
+                            if r["warning_status"]!="unflagged" or r["ownership_status"]!="owned"))
+        self.assertTrue(any(r["raw_row_count"]==2 for r in evidence))
+        self.assertTrue(all(not r["screening_candidate"] for r in evidence
+                            if r["duplicate_status"]=="conflicting_values"))
+        absent=[r for r in record["vital_audit"]["inventory"] if r["itemid"]=="220179"]
+        self.assertEqual(absent[0]["candidate_studies"],0)
+        self.assertEqual(absent[0]["total_studies"],2)
+        self.assertTrue((self.directory / "step10a_review.html").exists())
+        with (self.directory / "vital_fold_coverage.csv").open() as stream:
+            coverage=list(csv.DictReader(stream))
+        self.assertEqual({r["fold"] for r in coverage},{f"fold_{f}" for f in range(1,6)})
+        self.assertTrue(all(r["total_studies"]=="2" for r in coverage))
+        with (self.directory / "vital_review_template.csv").open() as stream:
+            self.assertTrue(all(r["decision"]=="pending" and not r["reviewer"] for r in csv.DictReader(stream)))
+        self.run_mode()
+        _verify_run(self.output,10)
+        with self.assertRaisesRegex(ValueError,"Joint vital-sign review is pending"):
+            self.run_mode("freeze",[self.root / "not_yet_approved.csv"],"synthetic_joint_dictionary")
+        rows,ack=self.decisions()
+        reviews=self.write_reviews(rows+[ack])
+        scope_path=self.root / "feature_scope.json"
+        scope=dict(vital_feature_scope="exclude_all",reviewer=self.settings["reviewer"],
+                   reviewed_on="2026-10-29",review_version="synthetic_scope_v1",rationale="Explicit exclusion",
+                   audit_fingerprint=record["audit_fingerprint"],
+                   audit_manifest_sha256=_file_hash(self.directory / "lab_audit_manifest.json"),
+                   cohort_version=self.settings["cohort_version"],split_version=self.settings["split_version"],
+                   retained_lab_itemids=sorted({r["itemid"] for r in rows if r["keep"]=="1"}),
+                   excluded_vital_itemids=sorted(self.settings["vital_audit"]["items"]),
+                   static_features_unchanged=True,no_study_excluded_for_missing_features=True,
+                   pending_raw_vital_issues_resolved=False)
+        for field,value in (("audit_fingerprint","stale"),("vital_feature_scope","include"),
+                            ("excluded_vital_itemids",[]),("reviewer","unknown"),
+                            ("retained_lab_itemids",[]),("pending_raw_vital_issues_resolved",True)):
+            scope_path.write_text(json.dumps({**scope,field:value}))
+            with self.assertRaisesRegex(ValueError,"Feature scope"):
+                self.run_mode("freeze",[reviews],"synthetic_joint_dictionary",scope_path)
+        scope_path.write_text(json.dumps(scope))
+        self.run_mode("freeze",[reviews],"synthetic_joint_dictionary",scope_path)
+        frozen=json.loads((self.output / "audit/burden_v2/lab_dictionary_freeze.json").read_text())
+        self.assertEqual(frozen["source_binding"]["feature_scope_review"]["sha256"],_file_hash(scope_path))
+        self.assertIn(str(scope_path),frozen["source_binding"]["review_files_sha256"])
+        with (icu / "chartevents.csv").open("a") as stream:
+            stream.write("\n")
+        with self.assertRaisesRegex(ValueError,"Stale|changed"):
+            self.run_mode()
 
     def decisions(self):
         record = self.record()

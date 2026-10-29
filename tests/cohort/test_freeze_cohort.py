@@ -19,6 +19,7 @@ import pyarrow.parquet as pq
 import test_image_qc as fixtures
 
 from src.cohort.burden_io import COMPONENTS, open_store
+from src.cohort.burden_events import classify_uncertainty, evidence
 from src.cohort.common import _file_hash, _json_file, _verify_run
 from src.cohort.freeze_cohort import (
     freeze_common_cohort,
@@ -158,6 +159,51 @@ class CommonCohortTests(unittest.TestCase):
         shared = [r for r in records if int(r["linked_studies"]) > 1]
         self.assertTrue(shared)
         self.assertTrue(all(int(r["linked_patients"]) == 1 for r in shared))
+
+    def test_valid_nonblocking_uncertainty_is_retained_and_invalid_cases_rejected(self):
+        self.prepare()
+        context = self.context()
+        labels = pq.read_table(context["labels_path"]).to_pylist()
+        original = pq.read_table(context["evidence_path"])
+        studies = {r["study_id"]: r for r in labels}
+        additions = []
+        for study, component, time, table, reason in (
+            (studies[200], COMPONENTS[4], studies[200]["t0"] - timedelta(hours=1),
+             "emar", "unconfirmed_medication_name"),
+            (studies[100], COMPONENTS[3],
+             studies[100][COMPONENTS[3] + "_first_event_time"] + timedelta(hours=1),
+             "chartevents", "spo2_artifact_review"),
+        ):
+            raw = dict(subject_id=str(study["subject_id"]),
+                       hadm_id=str(study["hadm_id"]), charttime=str(time))
+            row = evidence(study, component, table, raw, time, None, reason)
+            records = [r for r in original.to_pylist()
+                       if r["sample_id"] == study["sample_id"] and r["component"] == component]
+            classify_uncertainty(study, records + [row], True)
+            self.assertEqual(row["blocks_event"], 0)
+            additions.append(row)
+        variants = [copy.deepcopy(additions) for _ in range(6)]
+        variants[1][0]["blocks_event"] = 1
+        variants[2][0]["uncertainty_relevance"] = "independent_after_confirmed_positive"
+        variants[3][0]["raw_evidence"] = json.dumps(dict(subject_id="2", hadm_id="999"))
+        variants[4][1]["review_status"] = None
+        variants[5][0]["event_time"] = studies[200]["t0"] + timedelta(hours=1)
+        for number, extra in enumerate(variants):
+            with self.subTest(variant=number):
+                path = self.root / f"nonblocking_{number}.parquet"
+                pq.write_table(pa.Table.from_pylist(original.to_pylist() + extra,
+                                                   schema=original.schema), path)
+                scratch = self.root / f"nonblocking_store_{number}"
+                scratch.mkdir()
+                with open_store(scratch, "128MB") as connection:
+                    changed = {**context, "evidence_path": path}
+                    if number == 0:
+                        cohort, _ = validate_cohort(connection, changed)
+                        self.assertEqual(cohort.num_rows, 2)
+                        self.assertEqual(sorted(cohort["burden_score"].to_pylist()), [0.0, 8.0])
+                    else:
+                        with self.assertRaises(ValueError):
+                            validate_cohort(connection, changed)
 
     def test_label_and_evidence_semantics_fail(self):
         self.prepare()

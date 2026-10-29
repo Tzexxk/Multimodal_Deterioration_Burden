@@ -1,0 +1,21 @@
+{
+  "cohort_version": "burden_v2_h72_r02",
+  "split_version": "burden_v2_h72_r02_split_v2",
+  "algorithm_version": "patient_grouped_study_balanced_cv_v1",
+  "weights": [
+    68,
+    17,
+    15
+  ],
+  "seed": 42,
+  "primary_stratum": "phys_death_and_high_burden",
+  "require_high_burden_in_each_split": true,
+  "confirmed": true,
+  "reviewer": "ZE Xiaokang",
+  "reviewed_on": "2026-10-29",
+  "rationale": "User approved study-count-targeted15% fixed independent test plus grouped five-fold CV on the85% development pool. Patients never cross groups. Both binary outcome classes must occur in test and each validation fold; individual burden scores are soft balancing targets because rare scores have too few independent patients. Minimize study-count deviation before label imbalance. Fixed seed42; no model-performance-driven selection. Five fold_n/patient_split.parquet files define each fold; all five share fixed test patients and match the study index lists. No root patient_split.parquet is produced. Shared raw-feature reports use fold_1; model training selects the corresponding fold_n table. Final single model may refit on development after CV.",
+  "test_fraction": 0.15,
+  "n_folds": 5,
+  "primary_fold": 1,
+  "index_base": 0
+}

@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 from src.cohort import audit_burden_labels as audit
 from src.cohort.build_candidates import CANDIDATE_COLUMNS, OBSERVATION_COLUMNS
 from src.cohort.burden_events import EVIDENCE_COLUMNS
-from src.cohort.burden_io import COMPONENTS, open_store
+from src.cohort.burden_io import COMPONENTS, open_store, verify_review_sources
 from src.cohort.common import (
     _config_hash,
     _file_hash,
@@ -122,6 +122,24 @@ def verify_frozen_inputs(
         ):
             raise ValueError(f"Frozen audit {key} changed")
     metadata = _json_file(meta_path)
+    if metadata.get("review_evidence_only") or any(
+        metadata.get("pending_review_decisions", {}).values()
+    ):
+        raise ValueError("Review-only or pending decisions cannot publish labels")
+    bindings = metadata.get("review_evidence_sources", {})
+    verify_review_sources(root, paths, ehr["burden_v2"], bindings)
+    if decision.get("review_evidence_sources", {}) != bindings or decision.get(
+        "review_source_artifact"
+    ) != metadata.get("review_source_artifact"):
+        raise ValueError("Frozen review source binding changed")
+    artifact = metadata.get("review_source_artifact")
+    if bool(artifact) != bool(bindings):
+        raise ValueError("Frozen review sources require their evidence artifact")
+    if (
+        artifact
+        and _file_hash(_under_root(root, artifact["path"])) != artifact["sha256"]
+    ):
+        raise ValueError("Frozen review source artifact changed")
     for step in (3, 4, 5):
         _verify_run(outputs, step)
     if (
@@ -433,6 +451,8 @@ def verify_nonblocking_evidence(studies: list[dict], evidence_rows: list[dict]) 
             elif row["uncertainty_relevance"] == "history_without_window_infusion":
                 valid = (
                     component == COMPONENTS[4]
+                    and row["exclusion_reason"]
+                    != "supplemental_infusion_requires_review"
                     and row["event_time"] is not None
                     and row["event_time"] <= study["t0"]
                     and not any(

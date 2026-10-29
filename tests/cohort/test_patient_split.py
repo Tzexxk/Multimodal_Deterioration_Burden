@@ -31,6 +31,8 @@ from src.cohort.create_patient_split import (
     create_patient_split,
     load_settings,
     split_reports,
+    CV_ALGORITHM,
+    validate_cv_indices,
 )
 
 PROJECT = Path(__file__).parents[2]
@@ -76,6 +78,69 @@ def synthetic_cohort(n=222, high=8, phys=10):
 class PatientAllocationTests(unittest.TestCase):
     def setUp(self):
         self.settings = load_settings(PROJECT / "configs/patient_split_v1.json")
+
+    def test_grouped_cv_indices_reproducible_group_safe_and_tamper_rejected(self):
+        settings = {**self.settings, "algorithm_version": CV_ALGORITHM,
+                    "weights": [68, 17, 15], "test_fraction": 0.15,
+                    "n_folds": 5, "primary_fold": 1, "index_base": 0,
+                    "primary_stratum": "phys_death_and_high_burden"}
+        cohort = synthetic_cohort(n=24, high=12, phys=12)
+        extra = cohort.to_pylist()[0].copy()
+        extra.update(hadm_id=9999, study_id=9999, sample_id="p1000_h9999_s9999")
+        cohort = pa.concat_tables([cohort, pa.Table.from_pylist([extra], schema=cohort.schema)])
+        table, quotas = allocate_patients(cohort, settings)
+        bundle = quotas["cross_validation"]
+        validate_cv_indices(cohort, bundle, table)
+        checks = check_assignments(cohort, table, settings, quotas)
+        self.assertTrue(checks["patient_groups_disjoint"])
+        other, other_quotas = allocate_patients(cohort.take(list(reversed(range(25)))), settings)
+        self.assertTrue(table.equals(other))
+        self.assertEqual(quotas, other_quotas)
+        for mutation in ("duplicate", "patient", "label", "overlap", "missing_fold"):
+            with self.subTest(mutation=mutation):
+                bad = copy.deepcopy(bundle)
+                if mutation == "duplicate":
+                    bad["test_indices"].append(bad["test_indices"][0])
+                elif mutation == "patient":
+                    same = [r for r in bad["master"] if r["subject_id"] == 1000]
+                    same[0]["fold_id"] = (same[0]["fold_id"] + 1) % 6
+                elif mutation == "label":
+                    bad["master"][0]["burden_score"] = 8
+                elif mutation == "overlap":
+                    bad["folds"][0]["train_indices"].append(bad["test_indices"][0])
+                else:
+                    bad["folds"].pop()
+                with self.assertRaises(ValueError):
+                    validate_cv_indices(cohort, bad, table)
+
+    def test_grouped_cv_impossible_positive_coverage_fails(self):
+        settings = {**self.settings, "algorithm_version": CV_ALGORITHM}
+        with self.assertRaisesRegex(ValueError, "Grouped CV allocation failed"):
+            allocate_patients(synthetic_cohort(n=12, high=5, phys=5), settings)
+
+    def test_grouped_cv_synthetic_682_studies_with_rare_scores(self):
+        base = synthetic_cohort(n=284, high=23, phys=24)
+        rows = base.to_pylist()
+        for i in (0, 1):
+            rows[i].update(dict(zip(COMPONENTS, [1, 0, 1, 0, 1, 1])))
+            rows[i]["burden_score"] = 8.0
+        for i in range(2, 12):
+            rows[i].update(dict(zip(COMPONENTS, [0, 0, 1, 0, 0, 1])))
+            rows[i]["burden_score"] = 5.0
+        for j in range(398):
+            r = copy.deepcopy(rows[(j * 7) % 284])
+            r.update(study_id=10000 + j,
+                     sample_id=f"p{r['subject_id']}_h{r['hadm_id']}_s{10000+j}")
+            r.update(dict.fromkeys(COMPONENTS, 0))
+            r.update(burden_score=0.0, phys_death=0, high_burden=0)
+            rows.append(r)
+        cohort = pa.Table.from_pylist(rows, schema=base.schema)
+        settings = {**self.settings, "algorithm_version": CV_ALGORITHM}
+        patients, quotas = allocate_patients(cohort, settings)
+        bundle = quotas["cross_validation"]
+        validate_cv_indices(cohort, bundle, patients)
+        self.assertEqual(len(bundle["test_indices"]), 102)
+        self.assertTrue(all(len(f["validation_indices"]) == 116 for f in bundle["folds"]))
 
     def test_expected_quotas_order_invariance_and_multiple_admissions(self):
         cohort = synthetic_cohort()
@@ -290,7 +355,66 @@ class PatientSplitPublicationTests(unittest.TestCase):
                 0,
             )
         _verify_run(self.images.f.outputs, 9)
-        return pq.read_table(self.data / "patient_split.parquet")
+        from src.cohort.create_patient_split import split_table_names
+        return pq.read_table(self.data / split_table_names(_json_file(self.split_file))[0])
+
+    def test_grouped_cv_publishes_and_reuses_all_five_index_lists(self):
+        base = self.images.f
+        for subject in range(5, 17):
+            source = base.tables["admissions"][0 if subject < 10 else 1]
+            base.tables["patients"].append({**base.tables["patients"][0], "subject_id": str(subject)})
+            base.tables["admissions"].append({**source, "subject_id": str(subject),
+                                               "hadm_id": str(subject * 10)})
+            base.tables["transfers"].append(dict(
+                subject_id=str(subject), hadm_id=str(subject * 10),
+                transfer_id=str(subject * 100), eventtype="admit", careunit="Ward",
+                intime=source["admittime"], outtime=source["dischtime"],
+            ))
+            base.matches.append(dict(
+                subject_id=subject, hadm_id=subject * 10, study_id=subject * 100,
+                dicom_id=f"d{subject * 100}", t0=clinical.dt(0),
+                admittime=source["admittime"], dischtime=source["dischtime"],
+                match_status="unique_match",
+            ))
+        self.prepare()
+        settings = _json_file(self.split_file)
+        settings.update(algorithm_version=CV_ALGORITHM, weights=[68, 17, 15],
+                        test_fraction=0.15, n_folds=5, primary_fold=1, index_base=0,
+                        primary_stratum="phys_death_and_high_burden")
+        self.split_file.write_text(json.dumps(settings), encoding="utf-8")
+        first = self.run_split()
+        self.assertFalse((self.data / "patient_split.parquet").exists())
+        self.assertFalse((self.data / f"releases/{settings['split_version']}/patient_split.parquet").exists())
+        bundle = _json_file(self.audit / "cross_validation_indices.json")
+        validate_cv_indices(pq.read_table(self.f.data / "cohort.parquet"), bundle, first)
+        frozen = _json_file(self.audit / "split_freeze.json")
+        self.assertNotIn("patient_split.parquet", frozen["artifact_sha256"])
+        self.assertIn("cross_validation_indices.json", frozen["artifact_sha256"])
+        from src.cohort.create_patient_split import select_fold
+        test_patients = {r["subject_id"] for r in first.to_pylist() if r["split"] == "test"}
+        for fold in range(1, 6):
+            name = f"fold_{fold}/patient_split.parquet"
+            table = pq.read_table(self.data / name)
+            self.assertIn(name, frozen["artifact_sha256"])
+            self.assertEqual(_file_hash(self.data / name), frozen["artifact_sha256"][name])
+            self.assertTrue(table.equals(select_fold(first, bundle, fold)))
+            self.assertEqual({r["subject_id"] for r in table.to_pylist() if r["split"] == "test"},
+                             test_patients)
+        for invalid in (0, 6, True, "1"):
+            with self.assertRaises(ValueError):
+                select_fold(first, bundle, invalid)
+        self.assertTrue(first.equals(self.run_split()))
+        self.assertEqual(bundle, _json_file(self.audit / "cross_validation_indices.json"))
+        from src.ehr.build_ehr_features import verify_frozen_inputs
+        verify_frozen_inputs(self.root, self.images.configs, self.images.processing,
+                             self.split_file, settings)
+        damaged = self.data / f"releases/{settings['split_version']}/fold_5/patient_split.parquet"
+        damaged.write_bytes(b"corrupt")
+        with self.assertRaises(ValueError):
+            verify_frozen_inputs(self.root, self.images.configs, self.images.processing,
+                                 self.split_file, settings)
+        with self.assertRaises(ValueError):
+            self.run_split()
 
     def test_types_freeze_repeat_and_upstream_verification_rerun(self):
         self.prepare()

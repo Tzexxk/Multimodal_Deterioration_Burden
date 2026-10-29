@@ -28,7 +28,11 @@ def main() -> int:
         parser.add_argument(
             f"--{name}", type=Path, default=ROOT / f"configs/{filename}.json"
         )
-    return run_export(ROOT, parser.parse_args())
+    args = parser.parse_args()
+    for name, value in vars(args).items():
+        if isinstance(value, Path):
+            setattr(args, name, value.resolve())
+    return run_export(ROOT, args)
 
 
 if __name__ == "__main__":

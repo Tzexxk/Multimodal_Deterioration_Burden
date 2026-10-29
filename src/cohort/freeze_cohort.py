@@ -281,7 +281,14 @@ def validate_cohort(connection, context: dict) -> tuple[pa.Table, pa.Table]:
     )
     build_labels._reject(
         connection,
-        "SELECT count(*) FROM evidence WHERE review_status IS NULL OR review_status NOT IN ('not_required','reviewed') OR event_status IS NULL OR event_status NOT IN ('positive','preexisting_only','no_qualifying_record')",
+        # validate_labels already independently verifies every nonblocking unknown.
+        # Retain its raw pending status without treating it as an unknown label.
+        "SELECT count(*) FROM evidence WHERE "
+        "(qualifies IS NOT NULL AND (review_status IS NULL OR "
+        "review_status NOT IN ('not_required','reviewed') OR event_status IS NULL OR "
+        "event_status NOT IN ('positive','preexisting_only','no_qualifying_record'))) OR "
+        "(qualifies IS NULL AND (review_status IS DISTINCT FROM 'pending' OR "
+        "event_status IS DISTINCT FROM 'unresolved' OR blocks_event IS DISTINCT FROM 0))",
         "Unresolved final evidence status",
     )
     if counts != decision["window_comparison"][str(decision["horizon_hours"])]:

@@ -399,6 +399,9 @@ def verify_inputs(root: Path, args, settings: dict) -> dict:
     raw = _resolve_config_path(paths["mimic_iv"], root, raw=True)
     lab_settings = upstream.load_settings(args.lab_config)
     lab_sources = {k: _under_root(raw, v) for k, v in lab_settings["tables"].items()}
+    if lab_settings.get("vital_audit"):
+        lab_sources.update({k: _under_root(raw, v)
+                            for k, v in lab_settings["vital_audit"]["tables"].items()})
     lab_directory = outputs / "audit/burden_v2/labs" / lab_settings["audit_version"]
     lab_binding = upstream.source_binding(
         context, lab_sources, args.lab_config, lab_settings
@@ -420,6 +423,13 @@ def verify_inputs(root: Path, args, settings: dict) -> dict:
         lab_directory / "lab_audit_manifest.json"
     ):
         raise ValueError("Frozen dictionary laboratory evidence changed")
+    if lab_record.get("vital_audit"):
+        scope = dictionary["source_binding"].get("feature_scope_review")
+        if not scope or scope != upstream.validate_feature_scope(
+                Path(scope["path"]), lab_record,
+                pq.read_table(data / "lab_dictionary.parquet").to_pylist(), lab_settings,
+                lab_directory / "lab_audit_manifest.json"):
+            raise ValueError("Vital-feature exclusion scope is missing or changed before export")
     ehr.verify_releases(data, directory.parent / "ehr_features_releases.json")
     frozen = _json_file(directory / "ehr_features_freeze.json")
     if (
@@ -479,10 +489,32 @@ def verify_inputs(root: Path, args, settings: dict) -> dict:
         / upstream.load_settings(args.lab_config)["audit_version"]
         / "lab_audit_manifest.json",
     )
+    from src.cohort import create_patient_split as patient_split
+    if _json_file(args.split_config)["algorithm_version"] == patient_split.CV_ALGORITHM:
+        files["split"] = processed / "splits/burden_v2/fold_1/patient_split.parquet"
+        files["cross_validation"] = outputs / "audit/burden_v2" / patient_split.CV_REPORT
+        for fold in range(1, 6):
+            files[f"cv_fold_{fold}"] = processed / f"splits/burden_v2/fold_{fold}/patient_split.parquet"
     for field in ("cohort_decisions_path", "event_decisions_path"):
         review_path = _json_file(args.cohort)["burden_v2"].get(field)
         if review_path:
             files[field] = _resolve_config_path(review_path, root, raw=False)
+    review_artifact = _json_file(files["endpoint_decision"]).get(
+        "review_source_artifact"
+    )
+    if review_artifact:
+        path = _under_root(root, review_artifact["path"])
+        if _file_hash(path) != review_artifact["sha256"]:
+            raise ValueError("Review source artifact changed before export")
+        files["review_source_artifact"] = path
+    from src.cohort.burden_io import verify_review_sources
+
+    review_sources = _json_file(files["endpoint_decision"]).get(
+        "review_evidence_sources", {}
+    )
+    verify_review_sources(
+        root, _json_file(args.paths), _json_file(args.ehr)["burden_v2"], review_sources
+    )
     for name, digest in frozen["artifact_sha256"].items():
         if _file_hash(data / name) != digest:
             raise ValueError("Current EHR file differs from its freeze")
@@ -500,6 +532,9 @@ def verify_inputs(root: Path, args, settings: dict) -> dict:
         feature_freeze=frozen,
         source_files=files,
         source_hashes_export={k: _file_hash(v) for k, v in files.items()},
+        review_source_versions={
+            v["path"]: v["version"] for v in review_sources.values()
+        },
         lab_source_paths=lab_sources,
         lab_source_versions=lab_binding["source_versions"],
         export_config_hashes={
@@ -520,6 +555,11 @@ def verify_inputs(root: Path, args, settings: dict) -> dict:
 
 
 def check_sources(context: dict) -> None:
+    if any(
+        _file_version(Path(p)) != v
+        for p, v in context.get("review_source_versions", {}).items()
+    ):
+        raise ValueError("Review sources changed during export")
     if {k: _file_hash(p) for k, p in context["source_files"].items()} != context[
         "source_hashes_export"
     ]:
@@ -612,6 +652,12 @@ def metadata(
         "split_column": "split",
         "split_values": list(SPLITS),
         "split_unit": "subject_id",
+        "cross_validation": (
+            {"indices_file": "cross_validation_indices.json", "n_folds": 5,
+             "primary_view_fold": 1, "split_column_semantics": "fold1_only",
+             "patient_split_files": [f"splits/fold_{fold}/patient_split.parquet" for fold in range(1, 6)]}
+            if "cross_validation" in context["source_files"] else None
+        ),
         "split_version": settings["split_version"],
         "split_rules": {
             k: split[k]
@@ -783,6 +829,12 @@ def run_export(root: Path, args) -> int:
                 return path
 
             pq.write_table(samples, target("samples.parquet"), compression="zstd")
+            if "cross_validation" in context["source_files"]:
+                shutil.copyfile(context["source_files"]["cross_validation"],
+                                target("cross_validation_indices.json"))
+                for fold in range(1, 6):
+                    shutil.copyfile(context["source_files"][f"cv_fold_{fold}"],
+                                    target(f"splits/fold_{fold}/patient_split.parquet"))
             shutil.copyfile(
                 context["source_files"]["ehr"], target("ehr_features.parquet")
             )
@@ -792,7 +844,18 @@ def run_export(root: Path, args) -> int:
             summaries = summary_rows(pq.read_table(files["samples.parquet"]))
             _write_csv(target("summary.csv"), SUMMARY_COLUMNS, summaries)
             target("README.md").write_text(
-                package_readme(settings, generated_utc), encoding="utf-8"
+                package_readme(settings, generated_utc) + (
+                    "\n## Grouped five-fold CV\n\nsamples.parquet is sorted by sample_id. "
+                    "The split column is ONLY fold1's compatibility view. Use "
+                    "cross_validation_indices.json for all five training/validation index "
+                    "lists and the fixed independent test set (zero-based indices). "
+                    "For fold n, read splits/fold_n/patient_split.parquet and join its split "
+                    "column to samples by subject_id after dropping samples' compatibility split. "
+                    "The same images and raw EHR rows serve all five folds. "
+                    "Fit preprocessing separately on each fold's training rows; use the full "
+                    "development pool only when refitting the final single model.\n"
+                    if "cross_validation" in context["source_files"] else ""
+                ), encoding="utf-8"
             )
             for row in images.to_pylist():
                 copy_image(

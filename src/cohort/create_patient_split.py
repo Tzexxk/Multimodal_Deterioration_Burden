@@ -28,6 +28,8 @@ from src.cohort.common import (
 
 SPLITS = ("train", "validation", "test")
 ALGORITHM = "patient_stratified_pcg64_v1"
+CV_ALGORITHM = "patient_grouped_study_balanced_cv_v1"
+CV_REPORT = "cross_validation_indices.json"
 SCHEMA = pa.schema(
     [
         ("subject_id", pa.int64()),
@@ -64,6 +66,12 @@ def load_settings(path: Path) -> dict:
         "require_high_burden_in_each_split": True,
         "confirmed": True,
     }
+    if settings.get("algorithm_version") == CV_ALGORITHM:
+        expected.update(
+            algorithm_version=CV_ALGORITHM, weights=[68, 17, 15],
+            primary_stratum="phys_death_and_high_burden", test_fraction=0.15,
+            n_folds=5, primary_fold=1, index_base=0,
+        )
     if any(
         settings.get(k) != v or type(settings.get(k)) is not type(v)
         for k, v in expected.items()
@@ -188,7 +196,248 @@ def aggregate_patients(cohort: pa.Table, version: str) -> list[dict]:
     return [patients[key] for key in sorted(patients)]
 
 
+def split_report_names(settings: dict) -> tuple[str, ...]:
+    return REPORT_NAMES + ((CV_REPORT,) if settings["algorithm_version"] == CV_ALGORITHM else ())
+
+
+def split_table_names(settings: dict) -> tuple[str, ...]:
+    return (tuple(f"fold_{fold}/{TABLE_NAME}" for fold in range(1, 6))
+            if settings.get("algorithm_version") == CV_ALGORITHM else (TABLE_NAME,))
+
+
+def select_fold(patients: pa.Table, bundle: dict, fold: int) -> pa.Table:
+    """Return a patient split view without copying images or EHR features."""
+    if type(fold) is not int or not 1 <= fold <= 5:
+        raise ValueError("fold must be an integer from 1 to 5")
+    memberships = {r["subject_id"]: r["fold_id"] for r in bundle["master"]}
+    rows = patients.to_pylist()
+    if len(rows) != len(memberships) or {r["subject_id"] for r in rows} != set(memberships):
+        raise ValueError("Fold view patient coverage mismatch")
+    for row in rows:
+        group = memberships[row["subject_id"]]
+        row["split"] = "test" if group == 0 else "validation" if group == fold else "train"
+    return pa.Table.from_pylist(rows, schema=SCHEMA)
+
+
+def allocate_grouped_cv(cohort: pa.Table, settings: dict) -> tuple[pa.Table, dict]:
+    """Allocate whole patients; optimize study counts before label balance.
+
+    Identical patient label-count vectors share integer quota variables. Patients
+    are never split: seed42 orders the actual people within each vector group.
+    """
+    import scipy
+    from scipy.optimize import Bounds, LinearConstraint, milp
+    from scipy.sparse import coo_matrix
+
+    patients = aggregate_patients(cohort, settings["cohort_version"])
+    rows = sorted(cohort.to_pylist(), key=lambda r: r["sample_id"])
+    by_patient = {p["subject_id"]: [] for p in patients}
+    for row in rows:
+        by_patient[row["subject_id"]].append(row)
+    scores = list(range(9))
+    names = ["studies", *[f"score_{s}" for s in scores], "phys_death", "high_burden"]
+    def partition(people, fractions):
+        grouped = {}
+        for patient in people:
+            values = by_patient[patient["subject_id"]]
+            vector = (len(values), *[sum(r["burden_score"] == s for r in values) for s in scores],
+                      *[sum(r[k] for r in values) for k in ("phys_death", "high_burden")])
+            grouped.setdefault(vector, []).append(patient["subject_id"])
+        vectors = sorted(grouped)
+        features = np.asarray(vectors, dtype=float)
+        capacity = np.asarray([len(grouped[v]) for v in vectors])
+        bins, metrics, groups = len(fractions), len(names), len(vectors)
+        fractions = np.asarray(fractions, dtype=float)
+        totals = capacity @ features
+        variables = groups * bins + metrics * bins
+        matrix_rows, matrix_cols, matrix_values, lower, upper = [], [], [], [], []
+
+        def constraint(coefficients, lo, hi):
+            row = len(lower)
+            for col, value in coefficients.items():
+                if value:
+                    matrix_rows.append(row)
+                    matrix_cols.append(col)
+                    matrix_values.append(value)
+            lower.append(lo)
+            upper.append(hi)
+
+        for g in range(groups):
+            constraint({g * bins + b: 1 for b in range(bins)}, capacity[g], capacity[g])
+        for b in range(bins):
+            for metric in range(metrics):
+                coefficients = {g * bins + b: features[g, metric] for g in range(groups)}
+                slack = groups * bins + metric * bins + b
+                target = totals[metric] * fractions[b]
+                constraint({**coefficients, slack: -1}, -np.inf, target)
+                constraint({**coefficients, slack: 1}, target, np.inf)
+            for metric in (metrics - 2, metrics - 1):
+                minimum_groups = 5 if bins == 2 and b == 1 else 1
+                constraint({g * bins + b: int(features[g, metric] > 0)
+                            for g in range(groups)}, minimum_groups, np.inf)
+                constraint({g * bins + b: int(features[g, 0] - features[g, metric] > 0)
+                            for g in range(groups)}, minimum_groups, np.inf)
+        bounds = Bounds(np.zeros(variables), np.r_[np.repeat(capacity, bins),
+                                                  np.full(metrics * bins, np.inf)])
+        integrality = np.r_[np.ones(groups * bins), np.zeros(metrics * bins)]
+
+        def solve(objective):
+            matrix = coo_matrix((matrix_values, (matrix_rows, matrix_cols)),
+                                shape=(len(lower), variables)).tocsc()
+            result = milp(objective, integrality=integrality, bounds=bounds,
+                          constraints=LinearConstraint(matrix, lower, upper),
+                          options={"time_limit": 120.0, "mip_rel_gap": 0.0})
+            if not result.success:
+                raise ValueError("Grouped CV allocation failed; preserve patient groups and policy: "
+                                 + result.message)
+            return result
+
+        objective = np.zeros(variables)
+        objective[groups * bins:groups * bins + bins] = 1
+        first = solve(objective)
+        constraint({groups * bins + b: 1 for b in range(bins)}, -np.inf, first.fun + 1e-6)
+        rng = np.random.Generator(np.random.PCG64(settings["seed"]))
+        objective[:groups * bins] = rng.uniform(0, 1e-8, groups * bins)
+        for metric in range(1, metrics):
+            objective[groups * bins + metric * bins:groups * bins + (metric + 1) * bins] = (
+                (5 if metric >= metrics - 2 else 1) / max(totals[metric], 1)
+            )
+        result = solve(objective)
+        quotas_by_vector = np.rint(result.x[:groups * bins]).astype(int).reshape(groups, bins)
+        if np.max(np.abs(quotas_by_vector.ravel() - result.x[:groups * bins])) > 1e-5:
+            raise ValueError("Noninteger grouped CV assignment")
+        memberships = {}
+        for vector, quotas in zip(vectors, quotas_by_vector):
+            people = np.asarray(sorted(grouped[vector]))
+            people = people[rng.permutation(len(people))]
+            start = 0
+            for b, count in enumerate(quotas):
+                for subject in people[start:start + count]:
+                    memberships[int(subject)] = b
+                start += count
+            if start != len(people):
+                raise ValueError("Grouped CV patient coverage failed")
+        return memberships
+
+    # Freeze the holdout membership before optimizing development folds.
+    holdout = partition(patients, [0.15, 0.85])
+    development_patients = [p for p in patients if holdout[p["subject_id"]] == 1]
+    development_folds = partition(development_patients, [0.2] * 5)
+    memberships = {sid: 0 for sid, group in holdout.items() if group == 0}
+    memberships.update({sid: fold + 1 for sid, fold in development_folds.items()})
+    fractions = np.asarray([0.15] + [0.17] * 5)
+    master = [{"study_index": i, "sample_id": r["sample_id"],
+               "subject_id": r["subject_id"], "hadm_id": r["hadm_id"],
+               "burden_score": int(r["burden_score"]), "phys_death": r["phys_death"],
+               "high_burden": r["high_burden"], "fold_id": memberships[r["subject_id"]]}
+              for i, r in enumerate(rows)]
+    test = [r["study_index"] for r in master if r["fold_id"] == 0]
+    folds = [{"fold": fold,
+              "train_indices": [r["study_index"] for r in master if r["fold_id"] not in (0, fold)],
+              "validation_indices": [r["study_index"] for r in master if r["fold_id"] == fold]}
+             for fold in range(1, 6)]
+    bundle = dict(index_base=0, ordering="sample_id ascending", test_fold_id=0,
+                  allocation_order="holdout_then_development_folds",
+                  primary_view_fold=1, seed=settings["seed"], n_folds=5,
+                  algorithm_version=CV_ALGORITHM, solver_runtime=scipy.__version__,
+                  cohort_version=settings["cohort_version"], split_version=settings["split_version"],
+                  target_study_fractions=fractions.tolist(), master=master,
+                  test_indices=test, folds=folds,
+                  development_indices=[r["study_index"] for r in master if r["fold_id"] != 0],
+                  preprocessing="Fit all learned preprocessing only on each fold training indices; "
+                  "refit on development only for the final single model. Test remains untouched.")
+    def describe(indices):
+        part = [master[i] for i in indices]
+        return dict(studies=len(part), patients=len({r["subject_id"] for r in part}),
+                    burden_scores={str(s): sum(r["burden_score"] == s for r in part)
+                                   for s in range(9)},
+                    outcomes={k: dict(positive=sum(r[k] for r in part),
+                                      negative=sum(1 - r[k] for r in part),
+                                      positive_patients=len({r["subject_id"] for r in part if r[k]}))
+                              for k in ("phys_death", "high_burden")})
+    bundle["distribution"] = {
+        "test": describe(test), "development": describe(bundle["development_indices"]),
+        "folds": [{"fold": f["fold"], "train": describe(f["train_indices"]),
+                   "validation": describe(f["validation_indices"])} for f in folds],
+    }
+    bundle["score_group_support"] = {
+        str(s): len({r["subject_id"] for r in master if r["burden_score"] == s})
+        for s in scores
+    }
+    assignments = [{**p, "split": "test" if memberships[p["subject_id"]] == 0 else
+                    "validation" if memberships[p["subject_id"]] == 1 else "train",
+                    "seed": settings["seed"], "split_version": settings["split_version"],
+                    "cohort_version": settings["cohort_version"]} for p in patients]
+    table = pa.Table.from_pylist(assignments, schema=SCHEMA)
+    quotas = {name: [sum(1 if name == "total" else p[name] for p in assignments
+                         if p["split"] == part) for part in SPLITS]
+              for name in ("total", "ever_phys_death", "ever_high_burden")}
+    quotas["cross_validation"] = bundle
+    validate_cv_indices(cohort, bundle, table)
+    return table, quotas
+
+
+def validate_cv_indices(cohort: pa.Table, bundle: dict, patients: pa.Table | None = None) -> None:
+    """Check index identities and all five group boundaries independently of the solver."""
+    rows = sorted(cohort.to_pylist(), key=lambda r: r["sample_id"])
+    master = bundle["master"]
+    if (bundle["index_base"] != 0 or bundle["n_folds"] != 5 or
+            bundle["primary_view_fold"] != 1 or bundle["test_fold_id"] != 0 or
+            bundle["ordering"] != "sample_id ascending" or bundle["seed"] != 42 or
+            bundle["algorithm_version"] != CV_ALGORITHM or
+            bundle["allocation_order"] != "holdout_then_development_folds" or
+            {r["cohort_version"] for r in rows} != {bundle["cohort_version"]} or
+            len(master) != len(rows) or [r["fold"] for r in bundle["folds"]] != list(range(1, 6))):
+        raise ValueError("Invalid cross-validation index contract")
+    membership = {}
+    for i, (row, actual) in enumerate(zip(rows, master)):
+        expected = {k: row[k] for k in ("sample_id", "subject_id", "hadm_id", "burden_score",
+                                        "phys_death", "high_burden")}
+        if (type(actual["study_index"]) is not int or actual["study_index"] != i
+                or any(actual[k] != v for k, v in expected.items())
+                or type(actual["fold_id"]) is not int or not 0 <= actual["fold_id"] <= 5):
+            raise ValueError("CV master index identity changed")
+        subject = actual["subject_id"]
+        if subject in membership and membership[subject] != actual["fold_id"]:
+            raise ValueError("A patient crosses CV groups")
+        membership[subject] = actual["fold_id"]
+    def indices(values):
+        if (any(type(i) is not int or not 0 <= i < len(rows) for i in values)
+                or values != sorted(set(values))):
+            raise ValueError("Invalid or duplicate CV index")
+        return set(values)
+    test = indices(bundle["test_indices"])
+    if test != {r["study_index"] for r in master if r["fold_id"] == 0}:
+        raise ValueError("Test index membership changed")
+    development = set(range(len(rows))) - test
+    if indices(bundle["development_indices"]) != development:
+        raise ValueError("CV development membership changed")
+    validation_seen = set()
+    for fold in bundle["folds"]:
+        train, validation = indices(fold["train_indices"]), indices(fold["validation_indices"])
+        if (validation != {r["study_index"] for r in master if r["fold_id"] == fold["fold"]}
+                or train != development - validation or validation_seen & validation):
+            raise ValueError("CV train/validation coverage or complement changed")
+        validation_seen |= validation
+        for part in (train, validation, test):
+            for outcome in ("phys_death", "high_burden"):
+                if {rows[i][outcome] for i in part} != {0, 1}:
+                    raise ValueError("Both binary outcome classes are required in every CV set")
+    if validation_seen != development:
+        raise ValueError("Every development study must validate exactly once")
+    if patients is not None:
+        for p in patients.to_pylist():
+            if p["split_version"] != bundle["split_version"]:
+                raise ValueError("CV split version changed")
+            expected = "test" if membership[p["subject_id"]] == 0 else (
+                "validation" if membership[p["subject_id"]] == 1 else "train")
+            if p["split"] != expected:
+                raise ValueError("Primary split view disagrees with CV fold1")
+
+
 def allocate_patients(cohort: pa.Table, settings: dict) -> tuple[pa.Table, dict]:
+    if settings["algorithm_version"] == CV_ALGORITHM:
+        return allocate_grouped_cv(cohort, settings)
     patients = aggregate_patients(cohort, settings["cohort_version"])
     n = len(patients)
     positives = sum(p["ever_phys_death"] for p in patients)
@@ -271,14 +520,16 @@ def check_assignments(
             )
             for split in SPLITS
         ]
-        for name in quotas
+        for name in ("total", "ever_phys_death", "ever_high_burden")
     }
     if (
-        actual != quotas
+        actual != {k: quotas[k] for k in actual}
         or any(v <= 0 for v in actual["total"])
         or any(v <= 0 for v in actual["ever_high_burden"])
     ):
         raise ValueError("Patient quotas or high-burden coverage failed")
+    if "cross_validation" in quotas:
+        validate_cv_indices(cohort, quotas["cross_validation"], patients)
     return {
         "patient_coverage_complete": True,
         "patient_groups_disjoint": True,
@@ -508,8 +759,16 @@ def create_patient_split(
                 check_source_leakage(connection, patients)
                 checks["source_records_do_not_cross_splits"] = True
                 summary, checks = split_reports(context["cohort"], patients, checks)
-                locations = {TABLE_NAME: snapshot_data / TABLE_NAME} | {
-                    name: snapshot_audit / name for name in REPORT_NAMES
+                primary_table = split_table_names(settings)[0]
+                tables = {primary_table: patients}
+                if "cross_validation" in quotas:
+                    tables.update({f"fold_{fold}/{TABLE_NAME}": select_fold(
+                        patients, quotas["cross_validation"], fold) for fold in range(1, 6)})
+                    for name, table in tables.items():
+                        if name != primary_table:
+                            check_source_leakage(connection, table)
+                locations = {name: snapshot_data / name for name in tables} | {
+                    name: snapshot_audit / name for name in split_report_names(settings)
                 }
                 reused = freeze_path.exists()
                 if reused:
@@ -530,7 +789,8 @@ def create_patient_split(
                                 "Frozen patient split snapshot hash changed"
                             )
                     if (
-                        not pq.read_table(locations[TABLE_NAME]).equals(patients)
+                        any(not pq.read_table(locations[name]).equals(table)
+                            for name, table in tables.items())
                         or _json_file(locations["split_checks.json"]) != checks
                     ):
                         raise ValueError("Frozen patient assignments or checks changed")
@@ -539,9 +799,8 @@ def create_patient_split(
                         raise ValueError(
                             "Incomplete existing split snapshot; preserve it for investigation"
                         )
-                    pq.write_table(
-                        patients, run.path(locations[TABLE_NAME]), compression="zstd"
-                    )
+                    for name, table in tables.items():
+                        pq.write_table(table, run.path(locations[name]), compression="zstd")
                     _write_csv(
                         run.path(locations["split_summary.csv"]),
                         [
@@ -557,8 +816,13 @@ def create_patient_split(
                     run.path(locations["split_checks.json"]).write_text(
                         json.dumps(checks, indent=2) + "\n", encoding="utf-8"
                     )
+                    if "cross_validation" in quotas:
+                        run.path(locations[CV_REPORT]).write_text(
+                            json.dumps(quotas["cross_validation"], indent=2) + "\n",
+                            encoding="utf-8",
+                        )
                     report = (
-                        f"# Step 09 frozen patient split\n\nCohort: `{settings['cohort_version']}`. Split: `{version}`. Seed: 42. Algorithm: `{ALGORITHM}`.\n\n"
+                        f"# Step 09 frozen patient split\n\nCohort: `{settings['cohort_version']}`. Split: `{version}`. Seed: 42. Algorithm: `{settings['algorithm_version']}`.\n\n"
                         "| Group | Patients | Ever phys_death | Ever high_burden |\n| --- | ---: | ---: | ---: |\n"
                         + "\n".join(
                             f"| {split} | {quotas['total'][i]} | {quotas['ever_phys_death'][i]} | {quotas['ever_high_burden'][i]} |"
@@ -571,6 +835,25 @@ def create_patient_split(
                         + f"CSV checks: no_csv_inputs; see ../step_09_csv_tail_checks.csv. Step 05 accepted {context['source05']['csv_tail_checks']['incomplete_file_count']} incomplete source files; see ../step_05_csv_tail_checks.csv. Step 07 review checks remain in ../step_07_csv_tail_checks.csv. No raw CSV records are parsed.\n\n"
                         + "Identical split versions reuse immutable snapshots. Changed cohort content, parameters or code cannot overwrite a frozen split. A Step 08 verification-only rerun or a different Git HEAD does not change cohort identity when bound contents are unchanged.\n"
                     )
+                    if "cross_validation" in quotas:
+                        report = (
+                            f"# Study-balanced grouped five-fold CV\n\nCohort: {settings['cohort_version']}. "
+                            f"Split: {version}. Seed42.\n\n"
+                            "fold_1 through fold_5 each contain patient_split.parquet with that fold's "
+                            "train/validation/test roles. All five share the same test patients. "
+                            "The summary describes fold1. No root patient_split.parquet is created. "
+                            "Use cross_validation_indices.json for ALL five train/validation lists and "
+                            "the fixed independent test indices. Index base0; master sorted by sample_id. "
+                            "Test targets15% of studies; each development fold targets17% of all studies. "
+                            "Patient groups are indivisible. Binary outcome classes are mandatory in "
+                            "test and each validation fold; score balance is a soft objective. "
+                            "Integer optimization first minimizes study-count deviation,then normalized "
+                            "label-count deviation. No model performance or seed search is used.\n\n"
+                            "Learn imputation,scaling,vocabularies,selection and thresholds on each fold's "
+                            "training indices only. The final single model may refit on the development "
+                            "pool after CV; the test set must remain untouched. Raw EHR extraction is "
+                            "sample-wise and shares no fitted model preprocessor.\n"
+                        )
                     run.path(locations["step_09_report.md"]).write_text(
                         report, encoding="utf-8"
                     )
@@ -597,7 +880,7 @@ def create_patient_split(
                         json.dumps(frozen, indent=2) + "\n", encoding="utf-8"
                     )
                 for name, path in locations.items():
-                    current = data / name if name == TABLE_NAME else directory / name
+                    current = data / name if name in tables else directory / name
                     shutil.copyfile(
                         path if reused else run.path(path), run.path(current)
                     )
@@ -652,7 +935,17 @@ def create_patient_split(
                 run.path(directory / "step_09_run_metadata.json").write_text(
                     json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
                 )
-    print(
-        f"Step 09 complete: {version}; patient counts {dict(zip(SPLITS, quotas['total']))}; snapshot {'reused' if reused else 'frozen'}"
-    )
+    if "cross_validation" in quotas:
+        distribution = quotas["cross_validation"]["distribution"]
+        print(f"Step 09 complete: {version}; all 5 folds; snapshot {'reused' if reused else 'frozen'}")
+        print("Counts below are studies/patients; the test set is fixed across all folds.")
+        print("Fold | Train | Validation | Test")
+        for fold in distribution["folds"]:
+            groups = (fold["train"], fold["validation"], distribution["test"])
+            counts = " | ".join(f"{group['studies']}/{group['patients']}" for group in groups)
+            print(f"{fold['fold']} | {counts}")
+    else:
+        print(
+            f"Step 09 complete: {version}; patient counts {dict(zip(SPLITS, quotas['total']))}; snapshot {'reused' if reused else 'frozen'}"
+        )
     return 0

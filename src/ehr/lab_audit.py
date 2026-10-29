@@ -13,7 +13,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from src.cohort.common import _csv_reader, _progress, _validate_csv_rejects, _write_csv
+from src.cohort.common import _csv_reader, _file_hash, _progress, _validate_csv_rejects, _write_csv
 
 LAB_REQUIRED: Sequence[str] = (
     "labevent_id subject_id hadm_id specimen_id itemid charttime storetime value valuenum valueuom".split()
@@ -96,7 +96,7 @@ def scan_csv(
         f'r."{k}"' if k in header else f"NULL::VARCHAR AS {k}"
         for k in [*required, *optional]
     )
-    if name == "labs_raw":
+    if name in ("labs_raw", "vitals_raw"):
         projection += ", sha256(to_json(r)) AS raw_record_sha256"
     with _progress(f"Read Step 10 {name}", unit="table", total=1) as progress:
         connection.execute(
@@ -356,6 +356,153 @@ def write_reports(
         + f")) WHERE example_rank<={settings['example_limit']}",
     )
     return stats, examples, specimens
+
+
+def audit_vitals(connection, run, cohort, sources, cache, directory, settings, fingerprint):
+    """Inventory pre-t0 ICU observations; report evidence, never approve features."""
+    items = settings["vital_audit"]["items"]
+    definitions = read_small_csv(sources["d_items"], ["itemid", "label", "linksto", "unitname"], run)
+    for itemid, label in items.items():
+        matches = [r for r in definitions if r["itemid"] == itemid]
+        if len(matches) != 1 or matches[0]["label"] != label or matches[0]["linksto"] != "chartevents":
+            raise ValueError(f"Vital item dictionary identity changed: {itemid}")
+    connection.register("vital_items", pa.table({"itemid": list(items)}))
+    connection.register("vital_patients", cohort.select(["subject_id"]))
+    patient_filter = "EXISTS(SELECT 1 FROM vital_patients p WHERE p.subject_id=try_cast(r.subject_id AS BIGINT))"
+    fields = "subject_id hadm_id stay_id charttime storetime itemid value valuenum valueuom warning".split()
+    scan_csv(connection, sources["chartevents"], "vitals_raw", fields, [],
+             patient_filter + " AND r.itemid IN (SELECT itemid FROM vital_items)", run)
+    scan_csv(connection, sources["icustays"], "vital_stays",
+             "subject_id hadm_id stay_id intime outtime".split(), [], patient_filter, run)
+    connection.execute(
+        "CREATE TABLE vital_records AS SELECT raw_record_sha256 AS source_record_key,"
+        + ",".join(f"coalesce({f},'') AS {f}" for f in fields)
+        + ",count(*) AS raw_row_count FROM vitals_raw GROUP BY ALL")
+    connection.execute("DROP TABLE vitals_raw")
+    connection.register("vital_studies", cohort.select(
+        [k for k in ("sample_id", "subject_id", "hadm_id", "t0", "careunit_at_t0")
+         if k in cohort.column_names]))
+    connection.execute(
+        "CREATE VIEW parsed_vitals AS SELECT *,"
+        + timestamp_sql("charttime") + " AS chart_at,"
+        + timestamp_sql("storetime") + " AS stored_at,"
+        "try_cast(valuenum AS DOUBLE) AS numeric_value FROM vital_records")
+    # Keep invalid/unplaced history separately; it is not attached to an invented window.
+    write_query_csv(connection, run, directory / "vital_unplaced_records.csv",
+                    "SELECT * FROM parsed_vitals WHERE chart_at IS NULL ORDER BY source_record_key")
+    connection.execute(
+        "CREATE TABLE vital_associations AS SELECT v.*,s.sample_id,s.t0,s.hadm_id AS study_hadm_id,"
+        "CASE WHEN v.hadm_id<>cast(s.hadm_id AS VARCHAR) THEN 'different_admission' "
+        "WHEN (SELECT count(DISTINCT struct_pack(p:=i.subject_id,h:=i.hadm_id,a:=i.intime,b:=i.outtime)) "
+        "FROM vital_stays i WHERE i.stay_id=v.stay_id)<>1 THEN 'conflicting_or_missing_stay' "
+        "WHEN NOT EXISTS(SELECT 1 FROM vital_stays i WHERE i.subject_id=v.subject_id "
+        "AND i.hadm_id=v.hadm_id AND i.stay_id=v.stay_id "
+        "AND v.chart_at BETWEEN " + timestamp_sql("i.intime") + " AND " + timestamp_sql("i.outtime")
+        + ") THEN 'unresolved_stay_or_interval' ELSE 'owned' END AS ownership_status,"
+        "CASE WHEN trim(v.storetime)='' THEN 'missing_storetime' WHEN v.stored_at IS NULL "
+        "THEN 'invalid_storetime' WHEN v.stored_at<v.chart_at THEN 'storetime_before_charttime' "
+        "WHEN v.stored_at>s.t0 THEN 'future_storetime' ELSE 'available' END AS availability_status,"
+        "CASE WHEN NOT isfinite(v.numeric_value) OR v.numeric_value IS NULL THEN 'no_finite_valuenum' "
+        "WHEN regexp_matches(v.value,'[<>≤≥]') THEN 'comparator_value' "
+        "WHEN try_cast(v.value AS DOUBLE) IS NOT NULL AND try_cast(v.value AS DOUBLE)<>v.numeric_value "
+        "THEN 'text_numeric_disagreement' ELSE 'numeric' END AS numeric_status,"
+        "CASE WHEN trim(v.warning)='0' THEN 'unflagged' WHEN trim(v.warning)='' THEN 'unknown' "
+        "ELSE 'flagged_or_invalid' END AS warning_status "
+        "FROM parsed_vitals v JOIN vital_studies s ON try_cast(v.subject_id AS BIGINT)=s.subject_id "
+        "AND v.chart_at BETWEEN s.t0-INTERVAL '24 hours' AND s.t0")
+    connection.execute(
+        "CREATE VIEW vital_conflict_flags AS SELECT a.*,CASE WHEN EXISTS(SELECT 1 FROM vital_associations b "
+        "WHERE b.sample_id=a.sample_id AND b.itemid=a.itemid AND b.chart_at=a.chart_at "
+        "AND b.valueuom=a.valueuom AND isfinite(a.numeric_value) AND isfinite(b.numeric_value) "
+        "AND b.numeric_value<>a.numeric_value) THEN 'conflicting_values' ELSE 'no_value_conflict' END "
+        "AS duplicate_status FROM vital_associations a")
+    connection.execute(
+        "CREATE VIEW vital_candidates AS SELECT *,ownership_status='owned' AND availability_status='available' "
+        "AND numeric_status='numeric' AND warning_status='unflagged' "
+        "AND duplicate_status='no_value_conflict' AS screening_candidate "
+        "FROM vital_conflict_flags")
+    evidence = cache / "vital_evidence.parquet"
+    copy_parquet(connection, "vital_candidates", run.path(evidence))
+    denominator = cohort.num_rows
+    patients = len(set(cohort["subject_id"].to_pylist()))
+    observed = query_rows(connection,
+        "SELECT itemid,valueuom AS source_unit,count(*) AS study_associations,"
+        "count(DISTINCT source_record_key) AS distinct_records,"
+        "count(DISTINCT sample_id) AS observed_studies,"
+        "count(DISTINCT sample_id) FILTER(WHERE screening_candidate) AS candidate_studies,"
+        "count(DISTINCT subject_id) FILTER(WHERE screening_candidate) AS candidate_patients,"
+        "min(numeric_value) FILTER(WHERE isfinite(numeric_value)) AS raw_min,"
+        "max(numeric_value) FILTER(WHERE isfinite(numeric_value)) AS raw_max "
+        "FROM vital_candidates GROUP BY itemid,valueuom ORDER BY itemid,valueuom")
+    inventory = []
+    for itemid, label in items.items():
+        branches = [r for r in observed if r["itemid"] == itemid] or [dict(
+            itemid=itemid, source_unit="", study_associations=0, distinct_records=0,
+            observed_studies=0, candidate_studies=0, candidate_patients=0, raw_min=None, raw_max=None)]
+        inventory.extend({**r, "label": label, "total_studies": denominator,
+                          "total_patients": patients, "review_status": "pending"} for r in branches)
+    _write_csv(run.path(directory / "vital_inventory.csv"), list(inventory[0]), inventory)
+    write_query_csv(connection, run, directory / "vital_status_counts.csv",
+        "SELECT itemid,valueuom AS source_unit,ownership_status,availability_status,numeric_status,warning_status,duplicate_status,"
+        "count(*) AS study_associations,count(DISTINCT source_record_key) AS distinct_records "
+        "FROM vital_candidates GROUP BY ALL ORDER BY ALL")
+    write_query_csv(connection, run, directory / "vital_duplicates_conflicts.csv",
+        "SELECT sample_id,itemid,chart_at,valueuom AS source_unit,count(*) AS distinct_records,"
+        "sum(raw_row_count) AS raw_rows,count(DISTINCT numeric_value) AS distinct_numeric_values "
+        "FROM vital_candidates GROUP BY ALL HAVING count(*)>1 OR sum(raw_row_count)>1 ORDER BY ALL")
+    write_query_csv(connection, run, directory / "vital_examples.csv",
+        "SELECT * EXCLUDE(example_rank) FROM (SELECT *,row_number() OVER(PARTITION BY itemid,valueuom,"
+        "ownership_status,availability_status,numeric_status,warning_status ORDER BY sample_id,chart_at,source_record_key) "
+        f"AS example_rank FROM vital_candidates) WHERE example_rank<={settings['example_limit']}")
+    # Denominators include studies without any measurements; no outcome labels are used.
+    from src.cohort import create_patient_split as split
+    processed = next(p for p in run.roots if (p / "splits/burden_v2").exists())
+    split_dir = processed / "splits/burden_v2"
+    table_paths = sorted(split_dir.glob("fold_*/patient_split.parquet"))
+    if not table_paths:
+        table_paths = [split_dir / split.TABLE_NAME]
+    coverage = []
+    for path in table_paths:
+        table = pq.read_table(path).select(["subject_id", "split"])
+        connection.register("vital_split", table)
+        coverage.extend(query_rows(connection,
+            "SELECT ? AS fold,p.split,i.itemid,count(DISTINCT s.sample_id) AS total_studies,"
+            "count(DISTINCT s.subject_id) AS total_patients,"
+            "count(DISTINCT v.sample_id) FILTER(WHERE v.screening_candidate) AS candidate_studies,"
+            "count(DISTINCT s.subject_id) FILTER(WHERE v.screening_candidate) AS candidate_patients "
+            "FROM vital_studies s JOIN vital_split p USING(subject_id) CROSS JOIN vital_items i "
+            "LEFT JOIN vital_candidates v ON v.sample_id=s.sample_id AND v.itemid=i.itemid "
+            "GROUP BY p.split,i.itemid ORDER BY p.split,i.itemid", [path.parent.name]))
+    _write_csv(run.path(directory / "vital_fold_coverage.csv"), list(coverage[0]), coverage)
+    if "careunit_at_t0" in cohort.column_names:
+        write_query_csv(connection, run, directory / "vital_careunit_coverage.csv",
+            "SELECT s.careunit_at_t0,i.itemid,count(DISTINCT s.sample_id) AS total_studies,"
+            "count(DISTINCT s.subject_id) AS total_patients,"
+            "count(DISTINCT v.sample_id) FILTER(WHERE v.screening_candidate) AS candidate_studies "
+            "FROM vital_studies s CROSS JOIN vital_items i LEFT JOIN vital_candidates v "
+            "ON v.sample_id=s.sample_id AND v.itemid=i.itemid GROUP BY s.careunit_at_t0,i.itemid ORDER BY ALL")
+    review_rows = [{"audit_fingerprint": fingerprint,
+                   "review_key": "vital_" + json_hash([r["itemid"], r["source_unit"]]),
+                   "itemid": r["itemid"], "label": r["label"], "source_unit": r["source_unit"],
+                   "decision": "pending", "canonical_unit": "", "conversion_rule": "",
+                   "warning_rule": "", "duplicate_rule": "", "range_rule": "",
+                   "rationale": "", "reviewer": "", "reviewed_on": "", "review_version": "",
+                   "evidence_path": str(evidence)} for r in inventory]
+    _write_csv(run.path(directory / "vital_review_template.csv"), list(review_rows[0]), review_rows)
+    links = ["vital_inventory.csv", "vital_fold_coverage.csv", "vital_status_counts.csv",
+             "vital_duplicates_conflicts.csv", "vital_examples.csv", "vital_unplaced_records.csv",
+             "vital_review_template.csv"]
+    run.path(directory / "vital_review.html").write_text(
+        '<!doctype html><meta charset="utf-8"><h1>Vital-sign audit: pending review</h1>'
+        '<p>Screening counts are not approved features or clinical validity judgments. '
+        'Units and devices remain separate. Missing warning is unknown. No values are imputed, '
+        'converted or automatically excluded by range. Missing observations are not normal values.</p>'
+        + ''.join(f'<p><a href="{name}">{name}</a></p>' for name in links)
+        + '<pre>' + html.escape(json.dumps(inventory, indent=2, default=str)) + '</pre>', encoding="utf-8")
+    return {"review_complete": False, "features_approved": False, "lookback_hours": 24,
+            "inventory": inventory, "evidence_path": str(evidence),
+            "evidence_sha256": _file_hash(run.path(evidence)),
+            "interpretation": "screening only; no clinical rules or features approved"}
 
 
 def write_html(

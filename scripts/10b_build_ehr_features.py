@@ -31,6 +31,9 @@ def main() -> int:
             f"--{name}", type=Path, default=ROOT / f"configs/{filename}.json"
         )
     args = parser.parse_args()
+    for name, value in vars(args).items():
+        if isinstance(value, Path):
+            setattr(args, name, value.resolve())
     if (args.mode == "build") != bool(args.feature_set_version):
         parser.error("--feature-set-version is required only in build mode")
     return run_step10b(ROOT, args)

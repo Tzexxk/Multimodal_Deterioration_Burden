@@ -1,0 +1,30 @@
+{
+  "audit_version": "ehr_audit_r02",
+  "algorithm_version": "ehr_features_v1",
+  "cohort_version": "burden_v2_h72_r02",
+  "split_version": "burden_v2_h72_r02_split_v2",
+  "lookback_hours": 24,
+  "memory_limit": "2GB",
+  "static_features": [
+    "age_at_t0",
+    "sex",
+    "admission_type",
+    "admission_location",
+    "careunit_at_t0",
+    "current_service",
+    "hours_from_admission"
+  ],
+  "aggregations": [
+    "last_24h",
+    "min_24h",
+    "max_24h",
+    "mean_24h",
+    "count_24h",
+    "hours_since_last"
+  ],
+  "tables": {
+    "patients": "hosp/patients.csv",
+    "admissions": "hosp/admissions.csv",
+    "services": "hosp/services.csv"
+  }
+}

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import runpy
+import sys
 import tempfile
 import unittest
 from datetime import datetime
@@ -66,6 +68,56 @@ def approved_dictionary():
 
 
 class Step10BTests(unittest.TestCase):
+    def test_downstream_cli_resolves_relative_configuration_paths_before_verification(self):
+        from unittest.mock import Mock
+        for filename, entry, extra in (
+            ("10b_build_ehr_features.py", "run_step10b", ["--mode", "audit", "--dictionary-version", "lab_dictionary_r02"]),
+            ("11_export_training_package.py", "run_export", []),
+            ("12_validate_training_package.py", "run_validation", []),
+        ):
+            with self.subTest(filename=filename):
+                script = ROOT / "scripts" / filename
+                main = runpy.run_path(str(script), run_name="test_cli")["main"]
+                target = Mock(return_value=0)
+                argv = [str(script), *extra, "--processing", "configs/image_processing_v1.json",
+                        "--split-config", "configs/patient_split_r02.json"]
+                with patch.object(sys, "argv", argv), patch.dict(main.__globals__, {entry: target}):
+                    self.assertEqual(main(), 0)
+                args = target.call_args.args[1]
+                self.assertEqual(args.processing, Path("configs/image_processing_v1.json").resolve())
+                self.assertEqual(args.split_config, Path("configs/patient_split_r02.json").resolve())
+                self.assertTrue(all(v.is_absolute() for v in vars(args).values() if isinstance(v, Path)))
+
+    def test_cv_reports_cover_each_fold_without_fitting_or_changing_values(self):
+        cohort = pa.Table.from_pylist([
+            dict(sample_id=f"s{i}", subject_id=i) for i in range(6)
+        ])
+        table = pa.Table.from_pylist([
+            dict(sample_id=f"s{i}", lab_last_24h=float(i)) for i in range(6)
+        ])
+        patients = pa.Table.from_pylist([
+            dict(subject_id=i, split="test" if i == 0 else "validation" if i == 1 else "train")
+            for i in range(6)
+        ])
+        bundle = dict(master=[dict(sample_id=f"s{i}") for i in range(6)], folds=[
+            dict(fold=i, validation_indices=[i],
+                 train_indices=[j for j in range(1, 6) if j != i]) for i in range(1, 6)
+        ])
+        with duckdb.connect(":memory:") as connection:
+            connection.execute("CREATE TABLE selected(sample_id VARCHAR,feature_name VARCHAR,numeric_value DOUBLE)")
+            summary, missing = step.feature_reports(
+                connection, table, cohort, patients,
+                dict(numeric_features=["lab_last_24h"], categorical_features=[]), bundle,
+            )
+        groups = {r["split"]: r for r in summary}
+        self.assertEqual(len(groups), 14)
+        for i in range(1, 6):
+            self.assertEqual(groups[f"fold_{i}_train"]["studies"], 4)
+            self.assertEqual(groups[f"fold_{i}_validation"]["studies"], 1)
+            self.assertEqual(groups[f"fold_{i}_validation"]["minimum"], float(i))
+        self.assertEqual(len(missing), 14)
+        self.assertEqual(table["lab_last_24h"].to_pylist(), [float(i) for i in range(6)])
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="synthetic_step10b_")
         self.addCleanup(temporary.cleanup)

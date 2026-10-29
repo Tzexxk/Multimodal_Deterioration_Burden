@@ -446,7 +446,8 @@ def validate_wide(table: pa.Table, cohort: pa.Table, schema: dict) -> None:
 
 
 def feature_reports(
-    connection, table: pa.Table, cohort: pa.Table, patients: pa.Table, schema: dict
+    connection, table: pa.Table, cohort: pa.Table, patients: pa.Table, schema: dict,
+    cv_bundle: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     split_by_patient = {r["subject_id"]: r["split"] for r in patients.to_pylist()}
     subject = {r["sample_id"]: r["subject_id"] for r in cohort.to_pylist()}
@@ -459,6 +460,14 @@ def feature_reports(
         ]
         for group in ["all", "train", "validation", "test"]
     }
+    if cv_bundle is not None:
+        by_sample = {r["sample_id"]: r for r in rows}
+        master = cv_bundle["master"]
+        for fold in cv_bundle["folds"]:
+            for name, key in (("train", "train_indices"), ("validation", "validation_indices")):
+                groups[f"fold_{fold['fold']}_{name}"] = [
+                    by_sample[master[i]["sample_id"]] for i in fold[key]
+                ]
     summary, missingness = [], []
     raw = {
         (r["sample_id"], r["feature_name"])
@@ -715,6 +724,9 @@ def run_step10b(root: Path, args) -> int:
     paths = _json_file(args.paths)
     raw = _resolve_config_path(paths["mimic_iv"], root, raw=True)
     lab_sources = {k: _under_root(raw, v) for k, v in lab_settings["tables"].items()}
+    if lab_settings.get("vital_audit"):
+        lab_sources.update({k: _under_root(raw,v)
+                            for k,v in lab_settings["vital_audit"]["tables"].items()})
     lab_binding = upstream.source_binding(
         context, lab_sources, args.lab_config, lab_settings
     )
@@ -725,6 +737,12 @@ def run_step10b(root: Path, args) -> int:
         processed.parent,
         outputs,
     )
+    if lab_record.get("vital_audit"):
+        scope = frozen["source_binding"].get("feature_scope_review")
+        if not scope or scope != upstream.validate_feature_scope(
+                Path(scope["path"]), lab_record, pq.read_table(dictionary_path).to_pylist(),
+                lab_settings, lab_directory / "lab_audit_manifest.json"):
+            raise ValueError("Vital feature exclusion scope is missing or changed")
     if (
         frozen["source_binding"]["audit_manifest_sha256"]
         != _file_hash(lab_directory / "lab_audit_manifest.json")
@@ -873,10 +891,17 @@ def run_step10b(root: Path, args) -> int:
                     table = float32_table(rows, schema)
                     validate_wide(table, cohort, schema)
                     patients = pq.read_table(
-                        processed / "splits/burden_v2/patient_split.parquet"
+                        processed / "splits/burden_v2" / upstream.split.split_table_names(
+                            _json_file(args.split_config))[0]
+                    )
+                    cv_path = outputs / "audit/burden_v2/cross_validation_indices.json"
+                    cv_bundle = (
+                        _json_file(cv_path)
+                        if _json_file(args.split_config).get("algorithm_version")
+                        == upstream.split.CV_ALGORITHM else None
                     )
                     summary, missingness = feature_reports(
-                        connection, table, cohort, patients, schema
+                        connection, table, cohort, patients, schema, cv_bundle
                     )
                     pq.write_table(
                         table,

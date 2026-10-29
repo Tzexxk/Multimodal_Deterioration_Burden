@@ -16,7 +16,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import test_burden_audit as fixtures
 
-from src.cohort.audit_burden_labels import freeze_endpoint
+from src.cohort.audit_burden_labels import (
+    audit_burden_labels,
+    freeze_endpoint,
+    save_audit_snapshot,
+    verify_snapshot,
+)
 from src.cohort.build_labels import build_burden_labels, verify_frozen_inputs
 from src.cohort.burden_io import COMPONENTS
 from src.cohort.common import _file_hash, _json_file, _verify_run
@@ -222,7 +227,175 @@ class FormalLabelTests(unittest.TestCase):
             freeze_endpoint(self.root, *self.configs, review)
         self.assertEqual((self.audit / "endpoint_decision.json").read_bytes(), frozen)
 
+    def test_review_collection_to_reviewed_positive_freeze_and_source_tampering(self):
+        f = self.fixture
+        f.tables["chartevents"].append(
+            dict(
+                f.tables["chartevents"][0],
+                charttime=fixtures.dt(2.5),
+                value="97",
+                valuenum="97",
+            )
+        )
+        f.prepare()
+        f.run_audit()
+        baseline_manifest = (f.outputs / "audit/step_05_manifest.json").read_bytes()
+        f.cohort["burden_v2"]["supplementary_audit"] = dict(
+            baseline_outputs=str(f.outputs),
+            baseline_exclusions_path=str(
+                f.outputs / "audit/burden_v2/excluded_studies.csv"
+            ),
+            expected_scope_counts=[0, 0],
+        )
+        f.processed, f.outputs = self.root / "r02/processed", self.root / "r02/outputs"
+        f.paths.update(processed=str(f.processed), outputs=str(f.outputs))
+        self.data, self.audit = (
+            f.processed / "cohort/burden_v2",
+            f.outputs / "audit/burden_v2",
+        )
+        f.tables["d_items"].append(
+            dict(itemid="221906", label="Norepinephrine", linksto="inputevents")
+        )
+        f.tables["emar"], f.tables["emar_detail"] = [], []
+        f.ehr["burden_v2"]["review_evidence_sources"] = {
+            "inputevents_full": "icu/inputevents.csv"
+        }
+        source = f.iv / "icu/inputevents.csv"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        fields = "subject_id hadm_id itemid starttime endtime amount rate orderid linkorderid statusdescription".split()
+        with source.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=fields)
+            writer.writeheader()
+            writer.writerow(
+                dict(
+                    subject_id="1",
+                    hadm_id="10",
+                    itemid="221906",
+                    starttime=fixtures.dt(20),
+                    endtime=fixtures.dt(21),
+                    amount="1",
+                    rate="0.05",
+                    orderid="1",
+                    linkorderid="1",
+                    statusdescription="FinishedRunning",
+                )
+            )
+        pending = []
+        for study in (100, 101):
+            pending.append(
+                dict(
+                    sample_id=f"p1_h10_s{study}",
+                    horizon_hours="72",
+                    component=COMPONENTS[4],
+                    event_flag="",
+                    first_event_time="",
+                    source_record_keys="[]",
+                    reviewer="synthetic",
+                    rationale="approved clinical case awaiting binding",
+                    version="pending_v1",
+                    override_scope="component",
+                    decision="pending",
+                    reviewed_on="2026-10-28",
+                    source_run_id="a" * 32,
+                    source_manifest_sha256="b" * 64,
+                    supersedes="",
+                )
+            )
+        path = f.config / "event_decisions.csv"
+
+        def write(rows):
+            with path.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(pending[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+
+        stale = [
+            dict(
+                row,
+                version="stale_v0",
+                decision="set_event",
+                event_flag="0",
+                source_record_keys='["emar:old"]',
+            )
+            for row in pending
+        ]
+        write(pending + stale)
+        f.cohort["burden_v2"]["event_decisions_path"] = str(path)
+        f.prepare()
+        with redirect_stdout(io.StringIO()):
+            audit_burden_labels(self.root, *self.configs, review_only=True)
+        metadata = _json_file(self.audit / "run_metadata.json")
+        self.assertTrue(metadata["review_evidence_only"])
+        self.assertFalse(metadata["audit_ready_for_window_decision"])
+        with self.assertRaisesRegex(ValueError, "unresolved|pending|Review-only"):
+            freeze_endpoint(self.root, *self.configs, self.endpoint_review())
+        self.assertFalse((self.audit / "endpoint_decision.json").exists())
+        index = save_audit_snapshot(f.outputs)
+        snapshot = verify_snapshot(index)
+        retained = (f.outputs / "audit/step_05_manifest.json").read_bytes()
+        with self.assertRaises((ValueError, FileNotFoundError)):
+            f.run_audit()
+        self.assertEqual(
+            (f.outputs / "audit/step_05_manifest.json").read_bytes(), retained
+        )
+        records = pq.read_table(self.data / "review_source_records.parquet").to_pylist()
+        keys = json.dumps(
+            [r["source_record_key"] for r in records if r["subject_id"] == 1]
+        )
+        final = []
+        for row, old in zip(pending, stale, strict=True):
+            refs = [
+                {
+                    k: r[k]
+                    for k in (
+                        "version",
+                        "sample_id",
+                        "horizon_hours",
+                        "component",
+                        "override_scope",
+                    )
+                }
+                for r in (row, old)
+            ]
+            final.append(
+                dict(
+                    row,
+                    decision="set_event",
+                    event_flag="1",
+                    first_event_time=fixtures.dt(20),
+                    version="final_v2",
+                    source_record_keys=keys,
+                    source_run_id=metadata["run_id"],
+                    source_manifest_sha256=snapshot["source_manifest_sha256"],
+                    supersedes=json.dumps(refs),
+                )
+            )
+        write(pending + stale + final)
+        normal = f.run_audit()
+        self.assertFalse(normal["review_evidence_only"])
+        self.assertTrue(normal["audit_ready_for_window_decision"])
+        self.assertEqual(normal["pending_review_decisions"], {"cohort": 0, "event": 0})
+        self.assertIsNone(f.wide(48)[100][COMPONENTS[4]])
+        self.assertEqual(f.wide(72)[100][COMPONENTS[4]], 1)
+        freeze_endpoint(self.root, *self.configs, self.endpoint_review())
+        self.run_labels()
+        source.write_text("changed raw evidence\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "review evidence sources changed"):
+            verify_frozen_inputs(self.root, self.configs)
+        self.assertEqual(
+            (self.root / "outputs/audit/step_05_manifest.json").read_bytes(),
+            baseline_manifest,
+        )
+
     def test_supplementary_nonblocking_evidence_survives_formal_labels(self):
+        self.fixture.tables["chartevents"].append(
+            dict(
+                self.fixture.tables["chartevents"][0],
+                charttime=fixtures.dt(2.5),
+                value="97",
+                valuenum="97",
+            )
+        )
         self.fixture.prepare()
         self.fixture.run_audit()
         old_outputs = self.fixture.outputs

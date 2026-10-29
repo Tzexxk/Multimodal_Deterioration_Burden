@@ -1,0 +1,75 @@
+{
+  "review_version": "ehr_feature_scope_r02_2026-10-29_v2",
+  "reviewer": "ZE Xiaokang",
+  "reviewed_on": "2026-10-29",
+  "rationale": "User explicitly chose the original 25 laboratory indicators and declined vital-sign features because coverage is too low.",
+  "cohort_version": "burden_v2_h72_r02",
+  "split_version": "burden_v2_h72_r02_split_v3",
+  "audit_fingerprint": "781a078b2daaab431346f23db38142ad567bbc6be6f34015b79613f67f594e43",
+  "audit_manifest_sha256": "693fea7fa3867c07c8513a531228603b4b01204a95ef09c5fb9be19b0021576b",
+  "retained_lab_itemids": [
+    "50861",
+    "50868",
+    "50878",
+    "50882",
+    "50885",
+    "50893",
+    "50902",
+    "50912",
+    "50931",
+    "50960",
+    "50970",
+    "50971",
+    "50983",
+    "51006",
+    "51221",
+    "51222",
+    "51237",
+    "51248",
+    "51249",
+    "51250",
+    "51265",
+    "51275",
+    "51277",
+    "51279",
+    "51301"
+  ],
+  "vital_feature_scope": "exclude_all",
+  "excluded_vital_itemids": [
+    "220045",
+    "220050",
+    "220051",
+    "220052",
+    "220179",
+    "220180",
+    "220181",
+    "220210",
+    "220277",
+    "223761",
+    "223762"
+  ],
+  "static_features_unchanged": true,
+  "no_study_excluded_for_missing_features": true,
+  "raw_vital_evidence_retained": true,
+  "pending_raw_vital_issues_resolved": false,
+  "supersedes": [
+    {
+      "path": "configs\\reviews\\ehr_feature_scope_r02_2026-10-29_v1.json",
+      "sha256": "e4538b0ea9f18490e0a9325efb6ac1beccfababae9ea351031e6b07fb09b8339",
+      "review_version": "ehr_feature_scope_r02_2026-10-29_v1"
+    }
+  ],
+  "prior_laboratory_review": {
+    "path": "configs\\reviews\\lab_dictionary_reviews_2026-10-05_v1_rebuild_v1.csv",
+    "sha256": "2064be2d07f5797a34bfd99f48a1177c9baded9be8f102200eff49440d11d998"
+  },
+  "new_laboratory_review": {
+    "path": "configs\\reviews\\lab_dictionary_reviews_r02_2026-10-29_v2.csv",
+    "sha256": "7ba5c13b184b0b60fccd2c4f80d5a95782c47121c75c4e890f101f0374f2b4a0"
+  },
+  "dictionary_frozen": false,
+  "revalidation_evidence": {
+    "path": "outputs\\supplementary_r02\\audit\\burden_v2\\review_batches\\lab_audit_r02_v2_revalidation_2026-10-29.json",
+    "sha256": "640ba9c5fbf4573daa9b0993122b2a65663178e9e6424f594394fb67d0bca6b4"
+  }
+}

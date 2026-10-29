@@ -92,6 +92,15 @@ def load_settings(path: Path) -> dict:
         raise ValueError("Invalid laboratory memory limit")
     if set(settings.get("tables", {})) != {"d_labitems", "labevents", "admissions"}:
         raise ValueError("Laboratory source table configuration is incomplete")
+    if "vital_audit" in settings:
+        vital = settings["vital_audit"]
+        if (set(vital) != {"tables", "items"}
+                or set(vital["tables"]) != {"chartevents", "d_items", "icustays"}
+                or not vital["items"]
+                or any(not re.fullmatch(r"[1-9][0-9]*", k)
+                       or not isinstance(v, str) or not v.strip()
+                       for k, v in vital["items"].items())):
+            raise ValueError("Invalid vital-sign audit scope")
     return settings
 
 
@@ -105,11 +114,13 @@ def verify_frozen_inputs(
     """Read-only upstream replay; no raw clinical CSV scanning or publication."""
     context = split.load_frozen_cohort(root, configs, processing)
     outputs, processed = context["outputs"], context["processed"]
-    _verify_run(outputs, 9, processed / "splits/burden_v2/patient_split.parquet")
+    split_settings = split.load_settings(split_config)
+    primary_table = split.split_table_names(split_settings)[0]
+    patient_path = processed / "splits/burden_v2" / primary_table
+    _verify_run(outputs, 9, patient_path)
     directory = outputs / "audit/burden_v2"
     frozen = _json_file(directory / "split_freeze.json")
     metadata = _json_file(directory / "step_09_run_metadata.json")
-    split_settings = split.load_settings(split_config)
     binding = {
         "cohort": context["cohort_identity"],
         "split_config_sha256": _file_hash(split_config),
@@ -135,7 +146,7 @@ def verify_frozen_inputs(
         or metadata["split_checks_passed"] is not True
     ):
         raise ValueError("Step 09 publication metadata disagrees")
-    patients = pq.read_table(processed / "splits/burden_v2/patient_split.parquet")
+    patients = pq.read_table(patient_path)
     with duckdb.connect(":memory:") as connection:
         cohort, cohort_audit = freeze_cohort.validate_cohort(connection, context)
         if not cohort.equals(context["cohort"]) or not cohort_audit.equals(
@@ -147,6 +158,10 @@ def verify_frozen_inputs(
             raise ValueError("Frozen patient assignments changed")
         checks = split.check_assignments(cohort, patients, split_settings, quotas)
         split.check_source_leakage(connection, patients)
+        if "cross_validation" in quotas:
+            for fold in range(1, 6):
+                split.check_source_leakage(connection, split.select_fold(
+                    patients, quotas["cross_validation"], fold))
         checks["source_records_do_not_cross_splits"] = True
         _, checks = split.split_reports(cohort, patients, checks)
     if (
@@ -155,17 +170,29 @@ def verify_frozen_inputs(
         or checks != _json_file(directory / "split_checks.json")
     ):
         raise ValueError("Frozen split checks changed")
-    if set(frozen["artifact_sha256"]) != {split.TABLE_NAME, *split.REPORT_NAMES}:
+    table_names = split.split_table_names(split_settings)
+    if set(frozen["artifact_sha256"]) != {*table_names, *split.split_report_names(split_settings)}:
         raise ValueError("Incomplete frozen split artifact set")
     for name, digest in frozen["artifact_sha256"].items():
         current = (
             processed / "splits/burden_v2" / name
-            if name == split.TABLE_NAME
+            if name in table_names
             else directory / name
         )
-        snapshot = current.parent / "releases" / frozen["split_version"] / name
+        base = processed / "splits/burden_v2" if name in table_names else directory
+        snapshot = base / "releases" / frozen["split_version"] / name
         if _file_hash(current) != digest or _file_hash(snapshot) != digest:
             raise ValueError("Frozen split snapshot hash changed")
+        if name in table_names and name != split.TABLE_NAME:
+            fold = int(Path(name).parts[0].removeprefix("fold_"))
+            expected_fold = split.select_fold(patients, quotas["cross_validation"], fold)
+            if not pq.read_table(current).equals(expected_fold):
+                raise ValueError("Frozen fold patient assignments changed")
+        if name == split.CV_REPORT:
+            bundle = _json_file(current)
+            split.validate_cv_indices(cohort, bundle, patients)
+            if bundle != quotas.get("cross_validation"):
+                raise ValueError("Frozen CV indices disagree with reproducible allocation")
     freeze_hash = _file_hash(directory / "split_freeze.json")
     if freeze_hash != metadata["freeze_sha256"] or freeze_hash != _file_hash(
         directory / "releases" / frozen["split_version"] / "split_freeze.json"
@@ -175,7 +202,7 @@ def verify_frozen_inputs(
         "split_version": frozen["split_version"],
         "original_split_run_id": frozen["original_split_run_id"],
         "split_freeze_sha256": freeze_hash,
-        "patient_split_sha256": frozen["artifact_sha256"][split.TABLE_NAME],
+        "patient_split_sha256": frozen["artifact_sha256"][primary_table],
         "source_fingerprint": frozen["source_fingerprint"],
     }
     return context
@@ -287,6 +314,10 @@ def perform_audit(
     counts, examples, specimens = audit.write_reports(
         connection, run, directory, inventory, batches, outside, settings
     )
+    vital_record = None
+    if settings.get("vital_audit"):
+        vital_record = audit.audit_vitals(
+            connection, run, cohort, sources, cache, directory, settings, fingerprint)
     scope_hash = _file_hash(run.path(directory / "out_of_scope_inventory.csv"))
     review.write_templates(run, directory, inventory, fingerprint, scope_hash, batches)
     audit.write_html(
@@ -297,6 +328,14 @@ def perform_audit(
         specimens,
         fingerprint,
     )
+    if vital_record is not None:
+        run.path(directory / "step10a_review.html").write_text(
+            '<!doctype html><meta charset="utf-8"><h1>Step 10A joint evidence review</h1>'
+            '<p><a href="lab_review.html">Laboratory evidence and review templates</a></p>'
+            '<p><a href="vital_review.html">Vital-sign evidence and pending review template</a></p>'
+            '<p>Audit only. Laboratory approval does not approve vital-sign features. '
+            'Both reviews must be discussed before defining the expanded EHR feature set.</p>',
+            encoding="utf-8")
     text = (
         f"# Step 10A laboratory audit\n\nAudit: `{settings['audit_version']}`. Fingerprint: `{fingerprint}`.\n\n"
         "All observed window itemids are inventoried before clinical mapping. Navigation groups use names only. "
@@ -328,6 +367,7 @@ def perform_audit(
         "inventory": inventory,
         "batches": batches,
         "counts": counts,
+        "vital_audit": vital_record,
         "scope_inventory_sha256": scope_hash,
         "source_csv_tail_checks": run.csv_tail_summary(),
         "source_csv_checks": list(run.csv_checks.values()),
@@ -366,6 +406,30 @@ def dictionary_releases(context: dict) -> tuple[Path, dict]:
     return index_path, index
 
 
+def validate_feature_scope(path, record, decisions, settings, audit_path):
+    """Accept a separate, explicitly reviewed exclusion scope, not an event decision."""
+    scope = _json_file(path)
+    retained = {str(r["itemid"]) for r in decisions if r["keep"]}
+    if (scope.get("vital_feature_scope") != "exclude_all"
+            or scope.get("audit_fingerprint") != record["audit_fingerprint"]
+            or scope.get("audit_manifest_sha256") != _file_hash(audit_path)
+            or scope.get("reviewer") != settings["reviewer"]
+            or not scope.get("rationale", "").strip()
+            or not scope.get("review_version", "").strip()
+            or scope.get("cohort_version") != settings["cohort_version"]
+            or scope.get("split_version") != settings["split_version"]
+            or sorted(scope.get("retained_lab_itemids", [])) != sorted(retained)
+            or sorted(scope.get("excluded_vital_itemids", [])) != sorted(
+                settings.get("vital_audit", {}).get("items", {}))
+            or scope.get("static_features_unchanged") is not True
+            or scope.get("no_study_excluded_for_missing_features") is not True
+            or scope.get("pending_raw_vital_issues_resolved") is not False):
+        raise ValueError("Feature scope is stale, incomplete, or differs from reviewed exclusions")
+    from datetime import date
+    date.fromisoformat(scope["reviewed_on"])
+    return {"path": str(path), "sha256": _file_hash(path), "vital_feature_scope": "exclude_all"}
+
+
 def freeze_dictionary(
     run,
     context: dict,
@@ -375,6 +439,7 @@ def freeze_dictionary(
     acknowledgment: dict | None,
     review_hashes: dict,
     version: str,
+    feature_scope: dict | None = None,
 ) -> dict:
     if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", version):
         raise ValueError("Invalid dictionary version")
@@ -401,6 +466,8 @@ def freeze_dictionary(
         "dictionary_version": version,
         "code_sha256": code_hash(),
     }
+    if feature_scope is not None:
+        binding["feature_scope_review"] = feature_scope
     index_path, index = dictionary_releases(context)
     if freeze_path.exists():
         frozen = _json_file(freeze_path)
@@ -467,6 +534,7 @@ def run_step10(
     lab_config: Path,
     reviews: list[Path],
     dictionary_version: str | None = None,
+    feature_scope_review: Path | None = None,
 ) -> int:
     if (
         mode not in ("audit", "review", "freeze")
@@ -474,6 +542,7 @@ def run_step10(
         or (mode == "audit" and reviews)
         or (mode == "freeze" and not dictionary_version)
         or (mode != "freeze" and dictionary_version)
+        or (mode == "audit" and feature_scope_review is not None)
     ):
         raise ValueError("Invalid Step 10 mode arguments")
     settings = load_settings(lab_config)
@@ -482,6 +551,9 @@ def run_step10(
     paths = _json_file(configs[0])
     raw = _resolve_config_path(paths["mimic_iv"], root, raw=True)
     sources = {k: _under_root(raw, v) for k, v in settings["tables"].items()}
+    if settings.get("vital_audit"):
+        sources.update({k: _under_root(raw, v)
+                        for k, v in settings["vital_audit"]["tables"].items()})
     cache_root = (
         _resolve_config_path(paths["cache"], root, raw=False)
         if paths.get("cache")
@@ -491,7 +563,7 @@ def run_step10(
     cache = cache.resolve()
     directory = outputs / "audit/burden_v2/labs" / settings["audit_version"]
     _protect_outputs(paths, root, processed, outputs, cache)
-    for path in reviews + [lab_config]:
+    for path in reviews + [lab_config] + ([feature_scope_review] if feature_scope_review else []):
         if any(
             path.resolve().is_relative_to(p.resolve())
             for p in (processed, outputs, cache)
@@ -522,6 +594,7 @@ def run_step10(
         state = {"review_complete": False, "scope_acknowledgment_complete": False}
         decisions, acknowledgment = [], None
         frozen = None
+        feature_scope = None
         run.manifest.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
             prefix=".step_10_", dir=run.manifest.parent
@@ -541,6 +614,8 @@ def run_step10(
                     write_json(run.path(audit_path), record)
                 else:
                     shutil.copyfile(audit_path, run.path(audit_path))
+                if mode == "freeze" and record.get("vital_audit") and feature_scope_review is None:
+                    raise ValueError("Joint vital-sign review is pending; supply the explicitly reviewed feature scope")
                 if mode != "audit":
                     dictionary = audit.load_cache(
                         connection,
@@ -551,6 +626,12 @@ def run_step10(
                     decisions, acknowledgment = review.parse_reviews(
                         reviews, record["inventory"], dictionary, record, settings, run
                     )
+                    if feature_scope_review:
+                        review_hashes[str(feature_scope_review)] = _file_hash(feature_scope_review)
+                        feature_scope = validate_feature_scope(
+                            feature_scope_review, record, decisions, settings, audit_path)
+                    if mode == "freeze" and record.get("vital_audit") and feature_scope is None:
+                        raise ValueError("Joint vital-sign review is pending; supply the explicitly reviewed feature scope")
                     state, progress = review.review_progress(
                         connection, record["inventory"], decisions, acknowledgment
                     )
@@ -611,6 +692,7 @@ def run_step10(
                             acknowledgment,
                             review_hashes,
                             dictionary_version,
+                            feature_scope,
                         )
                 if frozen is None:
                     current = outputs / "audit/burden_v2/lab_dictionary_freeze.json"
@@ -657,6 +739,11 @@ def run_step10(
             "dictionary_frozen": frozen is not None,
             "dictionary_version": dictionary_version,
             "ehr_features_ready": False,
+            "vital_review_complete": (
+                record["vital_audit"]["review_complete"] if record.get("vital_audit") else None),
+            "vital_feature_scope": "exclude_all" if feature_scope else "pending" if record.get("vital_audit") else None,
+            "joint_review_complete": state["review_complete"] and (
+                not record.get("vital_audit") or feature_scope is not None),
             "cohort_version": settings["cohort_version"],
             "split_version": settings["split_version"],
             "horizon_hours": 72,

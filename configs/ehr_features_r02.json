@@ -2,7 +2,7 @@
   "audit_version": "ehr_audit_r02",
   "algorithm_version": "ehr_features_v1",
   "cohort_version": "burden_v2_h72_r02",
-  "split_version": "burden_v2_h72_r02_split_v1",
+  "split_version": "burden_v2_h72_r02_split_v3",
   "lookback_hours": 24,
   "memory_limit": "2GB",
   "static_features": [

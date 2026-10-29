@@ -236,6 +236,77 @@ def validate_samples(samples, cohort, split, settings):
     return counts
 
 
+def validate_cross_validation(cohort, patient_split, bundle, samples, fold_tables=None):
+    """Independent package verification: no upstream allocation/validation call."""
+    source = sorted(cohort.to_pylist(), key=lambda r: r["sample_id"])
+    packaged = samples.to_pylist()
+    require(bundle.get("index_base") == 0 and bundle.get("n_folds") == 5
+            and bundle.get("primary_view_fold") == 1 and bundle.get("test_fold_id") == 0
+            and bundle.get("seed") == 42 and bundle.get("ordering") == "sample_id ascending"
+            and bundle.get("algorithm_version") == "patient_grouped_study_balanced_cv_v1"
+            and bundle.get("allocation_order") == "holdout_then_development_folds"
+            and {r["cohort_version"] for r in source} == {bundle.get("cohort_version")}
+            and set(patient_split["split_version"].to_pylist()) == {bundle.get("split_version")},
+            "Invalid packaged CV contract")
+    master = bundle["master"]
+    require(len(master) == len(source) == len(packaged), "CV master size mismatch")
+    memberships = {}
+    for i, (r, m, p) in enumerate(zip(source, master, packaged)):
+        require(type(m["study_index"]) is int and m["study_index"] == i
+                and p["sample_id"] == r["sample_id"]
+                and all(m[k] == r[k] for k in ("sample_id", "subject_id", "hadm_id",
+                                               "burden_score", "phys_death", "high_burden"))
+                and type(m["fold_id"]) is int and 0 <= m["fold_id"] <= 5,
+                "CV row identity, label or ordering mismatch")
+        subject = r["subject_id"]
+        require(subject not in memberships or memberships[subject] == m["fold_id"],
+                "A patient crosses CV groups")
+        memberships[subject] = m["fold_id"]
+    def checked(values):
+        require(all(type(i) is int and 0 <= i < len(source) for i in values)
+                and values == sorted(set(values)), "Invalid CV index or duplicate")
+        return set(values)
+    test = checked(bundle["test_indices"])
+    require(test == {i for i, r in enumerate(master) if r["fold_id"] == 0},
+            "CV test membership mismatch")
+    development = set(range(len(source))) - test
+    require(checked(bundle["development_indices"]) == development,
+            "CV development membership mismatch")
+    folds = bundle["folds"]
+    require([f["fold"] for f in folds] == list(range(1, 6)), "Missing CV fold")
+    covered = set()
+    for fold in folds:
+        train, val = checked(fold["train_indices"]), checked(fold["validation_indices"])
+        require(val == {i for i, r in enumerate(master) if r["fold_id"] == fold["fold"]}
+                and train == development - val and not covered & val,
+                "CV complement, overlap or fold membership changed")
+        covered |= val
+        for indices in (train, val, test):
+            for label in ("phys_death", "high_burden"):
+                require({source[i][label] for i in indices} == {0, 1},
+                        "CV outcome class absent")
+    require(covered == development, "CV validation coverage incomplete")
+    if fold_tables is not None:
+        require(set(fold_tables) == set(range(1, 6)), "Missing CV patient split table")
+        original = {r["subject_id"]: r for r in patient_split.to_pylist()}
+        for fold, table in fold_tables.items():
+            rows = table.to_pylist()
+            require(table.schema == patient_split.schema and len(rows) == len(original)
+                    and {r["subject_id"] for r in rows} == set(original),
+                    "CV fold patient coverage or schema changed")
+            for row in rows:
+                group = memberships[row["subject_id"]]
+                expected_role = "test" if group == 0 else "validation" if group == fold else "train"
+                require(row == {**original[row["subject_id"]], "split": expected_role},
+                        "CV fold patient assignment or metadata changed")
+    by_patient = {r["subject_id"]: r["split"] for r in patient_split.to_pylist()}
+    for m, p in zip(master, packaged):
+        expected = "test" if m["fold_id"] == 0 else (
+            "validation" if m["fold_id"] == 1 else "train")
+        require(p["split"] == expected == by_patient[m["subject_id"]],
+                "CV fold1 compatibility view changed")
+
+
 def retained_rules(dictionary):
     rules = [r for r in dictionary.to_pylist() if r["keep"]]
     require(bool(rules), "No retained dictionary rules")
@@ -775,6 +846,12 @@ def validate_metadata(
         },
         "Split settings changed",
     )
+    if split_settings["algorithm_version"] == "patient_grouped_study_balanced_cv_v1":
+        require(metadata.get("cross_validation") == {
+            "indices_file": "cross_validation_indices.json", "n_folds": 5,
+            "primary_view_fold": 1, "split_column_semantics": "fold1_only",
+            "patient_split_files": [f"splits/fold_{fold}/patient_split.parquet" for fold in range(1, 6)],
+        }, "CV metadata must identify all folds and the fold1 compatibility view")
     require(
         metadata["configuration_sha256"] == freeze["binding"]["configuration_sha256"]
         and metadata["upstream_file_sha256"] == freeze["binding"]["source_sha256"]
@@ -987,7 +1064,7 @@ def verify_provenance(root, args, settings, processed, outputs):
 
     def record(path):
         digest(path)
-        return _json_file(path)
+        return _json_file(Path(path))
 
     for step in range(1, 12):
         if not (outputs / f"audit/step_{step:02d}_manifest.json").is_file():
@@ -1074,6 +1151,14 @@ def verify_provenance(root, args, settings, processed, outputs):
     for field in ("cohort_decisions_path", "event_decisions_path"):
         if cohort_rules.get(field):
             files[field] = _resolve_config_path(cohort_rules[field], root, raw=False)
+    review_artifact = record(files["endpoint_decision"]).get("review_source_artifact")
+    if review_artifact:
+        files["review_source_artifact"] = _under_root(root, review_artifact["path"])
+    if _json_file(args.split_config)["algorithm_version"] == create_patient_split.CV_ALGORITHM:
+        files["split"] = processed / "splits/burden_v2/fold_1/patient_split.parquet"
+        files["cross_validation"] = audit / create_patient_split.CV_REPORT
+        for fold in range(1, 6):
+            files[f"cv_fold_{fold}"] = processed / f"splits/burden_v2/fold_{fold}/patient_split.parquet"
     require(
         set(files) == set(package_record["binding"]["source_sha256"]),
         "Incomplete package source binding",
@@ -1103,10 +1188,38 @@ def verify_provenance(root, args, settings, processed, outputs):
         "Split freeze identity changed",
     )
     split_settings = _json_file(args.split_config)
+    grouped_cv = split_settings["algorithm_version"] == create_patient_split.CV_ALGORITHM
     require(
-        split_settings["seed"] == 42 and split_settings["weights"] == [70, 15, 15],
+        split_settings["seed"] == 42 and split_settings["weights"]
+        == ([68, 17, 15] if grouped_cv else [70, 15, 15]),
         "Frozen split policy changed",
     )
+    if grouped_cv:
+        require(split_settings.get("n_folds") == 5
+                and split_settings.get("test_fraction") == 0.15
+                and split_settings.get("primary_fold") == 1,
+                "Grouped CV policy changed")
+        cv_path = audit / create_patient_split.CV_REPORT
+        files["cross_validation"] = cv_path
+        expected_cv_hash = frozen_split["artifact_sha256"].get(create_patient_split.CV_REPORT)
+        require(bool(expected_cv_hash), "Frozen CV index artifact missing")
+        digest(cv_path, expected_cv_hash)
+        digest(package / create_patient_split.CV_REPORT, expected_cv_hash)
+        fold_tables = {}
+        for fold in range(1, 6):
+            name = f"fold_{fold}/patient_split.parquet"
+            path = processed / "splits/burden_v2" / name
+            files[f"cv_fold_{fold}"] = path
+            expected_hash = frozen_split["artifact_sha256"].get(name)
+            require(bool(expected_hash), "Frozen fold patient split missing")
+            digest(path, expected_hash)
+            digest(package / "splits" / name, expected_hash)
+            fold_tables[fold] = pq.read_table(package / "splits" / name)
+        validate_cross_validation(
+            pq.read_table(files["cohort"]), pq.read_table(files["split"]),
+            record(cv_path), pq.read_table(package / "samples.parquet"),
+            fold_tables,
+        )
     for frozen, version, table_dir, table_names, freeze_name in [
         (
             frozen_cohort,
@@ -1119,7 +1232,7 @@ def verify_provenance(root, args, settings, processed, outputs):
             frozen_split,
             settings["split_version"],
             processed / "splits/burden_v2",
-            {"patient_split.parquet"},
+            set(create_patient_split.split_table_names(split_settings)),
             "split_freeze.json",
         ),
     ]:
@@ -1170,11 +1283,47 @@ def verify_provenance(root, args, settings, processed, outputs):
             raw_versions[str(path)] = version
     raw_root = _resolve_config_path(_json_file(args.paths)["mimic_iv"], root, raw=True)
     decision = record(files["endpoint_decision"])
-    if cohort_rules.get("supplementary_audit") or any(
-        field in files for field in ("cohort_decisions_path", "event_decisions_path")
+    if (
+        cohort_rules.get("supplementary_audit")
+        or any(
+            field in files
+            for field in ("cohort_decisions_path", "event_decisions_path")
+        )
+        or _json_file(args.ehr)["burden_v2"].get("review_evidence_sources")
     ):
         metadata05 = record(audit / "run_metadata.json")
         source05 = decision["source_audit"]
+        require(
+            not metadata05.get("review_evidence_only")
+            and not any(metadata05.get("pending_review_decisions", {}).values()),
+            "Review-only or pending decisions cannot pass acceptance",
+        )
+        from src.cohort.burden_io import verify_review_sources
+
+        review_sources = metadata05.get("review_evidence_sources", {})
+        require(
+            decision.get("review_evidence_sources", {}) == review_sources,
+            "Review source binding changed",
+        )
+        verify_review_sources(
+            root,
+            _json_file(args.paths),
+            _json_file(args.ehr)["burden_v2"],
+            review_sources,
+        )
+        for entry in review_sources.values():
+            raw_versions[entry["path"]] = entry["version"]
+        artifact = metadata05.get("review_source_artifact")
+        require(
+            bool(artifact) == bool(review_sources),
+            "Missing review source evidence artifact",
+        )
+        require(
+            decision.get("review_source_artifact") == artifact,
+            "Review evidence artifact binding changed",
+        )
+        if artifact:
+            digest(_under_root(root, artifact["path"]), artifact["sha256"])
         require(
             source05["run_id"]
             == metadata05["run_id"]
@@ -1289,6 +1438,29 @@ def verify_provenance(root, args, settings, processed, outputs):
         "review_files_sha256"
     ].items():
         digest(path, expected)
+    if lab_audit.get("vital_audit"):
+        scope_ref = dictionary_freeze["source_binding"].get("feature_scope_review")
+        require(isinstance(scope_ref, dict), "Missing explicit vital-feature exclusion decision")
+        digest(scope_ref["path"], scope_ref["sha256"])
+        require(dictionary_freeze["source_binding"]["review_files_sha256"].get(scope_ref["path"])
+                == scope_ref["sha256"], "Unbound feature-scope review")
+        scope = record(scope_ref["path"])
+        require(scope.get("vital_feature_scope") == scope_ref.get("vital_feature_scope") == "exclude_all"
+                and scope.get("audit_fingerprint") == lab_audit["audit_fingerprint"]
+                and scope.get("audit_manifest_sha256") == digest(files["lab_audit"])
+                and scope.get("reviewer") == _json_file(args.lab_config)["reviewer"]
+                and bool(scope.get("rationale")) and bool(scope.get("review_version"))
+                and scope.get("cohort_version") == settings["cohort_version"]
+                and scope.get("split_version") == settings["split_version"]
+                and sorted(scope.get("retained_lab_itemids", [])) == sorted({
+                    str(r["itemid"]) for r in pq.read_table(files["dictionary"]).to_pylist() if r["keep"]
+                })
+                and sorted(scope.get("excluded_vital_itemids", [])) == sorted(
+                    _json_file(args.lab_config).get("vital_audit", {}).get("items", {}))
+                and scope.get("static_features_unchanged") is True
+                and scope.get("no_study_excluded_for_missing_features") is True
+                and scope.get("pending_raw_vital_issues_resolved") is False
+                and bool(scope.get("reviewed_on")), "Invalid feature exclusion scope")
     feature_snapshot = data / "releases" / settings["feature_set_version"]
     digest(
         feature_snapshot / "ehr_features_freeze.json", digest(files["feature_freeze"])

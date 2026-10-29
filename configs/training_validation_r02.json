@@ -3,23 +3,23 @@
   "interface_version": "1.0",
   "release_id": "burden_v2_h72_r02",
   "cohort_version": "burden_v2_h72_r02",
-  "split_version": "burden_v2_h72_r02_split_v1",
+  "split_version": "burden_v2_h72_r02_split_v3",
   "dictionary_version": "lab_dictionary_r02",
   "feature_set_version": "ehr_features_r02",
   "expected_counts": {
-    "studies": null,
-    "admissions": null,
-    "patients": null
+    "studies": 682,
+    "admissions": 406,
+    "patients": 284
   },
   "expected_split_studies": {
-    "train": null,
-    "validation": null,
-    "test": null
+    "train": 464,
+    "validation": 116,
+    "test": 102
   },
   "expected_split_patients": {
-    "train": null,
-    "validation": null,
-    "test": null
+    "train": 130,
+    "validation": 54,
+    "test": 100
   },
   "relocation_policy": "temporary_directory",
   "failure_detail_limit": 50
